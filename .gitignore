@@ -12,6 +12,12 @@ pipeline/source/
 pipeline/source_obvious/
 pipeline/staging/
 pipeline/staging_hashed/
+pipeline/staging_hashed.zip
+pipeline/staging_hashed.tar*
+
+# Cloudflare Wrangler CLI local state
+pipeline/.wrangler/
+.wrangler/
 
 # Per-participant exports / saved CSVs — analyst working data, never commit
 analysis/data/
