@@ -21,6 +21,7 @@
 
 import { STRUCTURE } from './config.js';
 
+
 const MANIFEST_URL = './stimuli.json';
 
 let _loaded = null;
@@ -67,13 +68,27 @@ export async function loadStimuli() {
     `practice: ${_loaded.practice.length}, qualification: ${_loaded.qualification.length}`,
   );
 
-  if (_loaded.main.length === 0) {
-    throw new Error(
-      `Stimulus manifest at ${MANIFEST_URL} loaded but the main pool is empty. ` +
-      `This usually means a deployment was bundled before build_manifest.py ` +
-      `wrote the production manifest into experiment/public/stimuli.json. ` +
-      `Run build_manifest.py with --base-url and --public-out, then rebuild.`,
-    );
+  // Validate the manifest has the minimum stimuli for each phase the
+  // experiment depends on. If any of these is empty we'd silently skip a
+  // phase and the participant would race past instructions straight to
+  // the debrief — which is the exact UX failure we hit during the
+  // student's pilot. Throwing here lets main.js render a clean error
+  // page instead.
+  const minima = [
+    ['main', 1],
+    ['practice', STRUCTURE.practiceTrials - STRUCTURE.practiceCatchTrials],
+    ['qualification', STRUCTURE.qualificationTrials],
+  ];
+  for (const [phase, min] of minima) {
+    if (_loaded[phase].length < min) {
+      throw new Error(
+        `Stimulus manifest at ${MANIFEST_URL} loaded but the '${phase}' ` +
+        `pool has only ${_loaded[phase].length} entries (need ≥ ${min}). ` +
+        `This usually means a deployment was bundled before the manifest ` +
+        `was regenerated. Re-run build_manifest.py with --base-url and ` +
+        `--public-out, then rebuild.`,
+      );
+    }
   }
 
   return _loaded;
