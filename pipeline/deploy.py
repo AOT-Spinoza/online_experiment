@@ -42,8 +42,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def run(cmd: list[str], **kwargs) -> int:
-    print(f"$ {' '.join(cmd)}")
-    return subprocess.call(cmd, cwd=str(REPO_ROOT), **kwargs)
+    # Default cwd to the repo root, but let callers override (e.g. step 2
+    # runs npm from experiment/). pop-with-default avoids the duplicate
+    # `cwd` keyword that boto3.subprocess complains about.
+    kwargs.setdefault("cwd", str(REPO_ROOT))
+    print(f"$ {' '.join(cmd)}  (in {kwargs['cwd']})")
+    return subprocess.call(cmd, **kwargs)
 
 
 def main() -> int:
