@@ -10,10 +10,10 @@
 
 import HtmlKeyboardResponse from '@jspsych/plugin-html-keyboard-response';
 import CallFunction from '@jspsych/plugin-call-function';
-import PreloadPlugin from '@jspsych/plugin-preload';
 
 import { KEYS, STRUCTURE } from '../config.js';
 import { phaseHasStimuli, buildQualificationList } from '../stimuli.js';
+import { preloadConfig } from '../preload_config.js';
 
 const LAYER_NAME = 'layer_c';
 
@@ -44,14 +44,11 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
 
   const qualList = buildQualificationList(jsPsych, stimuli);
 
-  const preload = {
-    type: PreloadPlugin,
-    video: qualList.map(s => s.url),
-    show_progress_bar: true,
-    auto_preload: false,
+  const preload = preloadConfig({
+    videos: qualList.map(s => s.url),
     message: '<p>Loading qualification clips…</p>',
-    data: { trial_type_tag: 'preload', phase: 'qualification' },
-  };
+    phase: 'qualification',
+  });
 
   const trials = qualList.map((s, i) => factories.videoTrial(
     { stimulus_id: s.stimulus_id, url: s.url },

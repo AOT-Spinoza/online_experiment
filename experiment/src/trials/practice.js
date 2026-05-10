@@ -14,10 +14,10 @@
 // will likely also skip, gracefully).
 
 import HtmlKeyboardResponse from '@jspsych/plugin-html-keyboard-response';
-import PreloadPlugin from '@jspsych/plugin-preload';
 
 import { KEYS } from '../config.js';
 import { phaseHasStimuli, buildPracticeList } from '../stimuli.js';
+import { preloadConfig } from '../preload_config.js';
 
 const LAYER_NAME = 'layer_b';
 
@@ -71,14 +71,11 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
     ...practiceList.map(s => s.url),
     ...(catchSlot ? [catchSlot.url] : []),
   ];
-  const preload = {
-    type: PreloadPlugin,
-    video: allUrls,
-    show_progress_bar: true,
-    auto_preload: false,
+  const preload = preloadConfig({
+    videos: allUrls,
     message: '<p>Loading practice clips… this may take a few seconds.</p>',
-    data: { trial_type_tag: 'preload', phase: 'practice' },
-  };
+    phase: 'practice',
+  });
 
   const trials = practiceList.map((s, i) => factories.videoTrial(
     { stimulus_id: s.stimulus_id, url: s.url },

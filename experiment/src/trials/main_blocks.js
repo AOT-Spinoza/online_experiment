@@ -20,13 +20,13 @@
 // participant can still withdraw at any time per the consent (close the
 // tab); per-block saves preserve data up to the last completed block.
 
-import PreloadPlugin from '@jspsych/plugin-preload';
 import HtmlKeyboardResponse from '@jspsych/plugin-html-keyboard-response';
 
 import { KEYS, STRUCTURE } from '../config.js';
 import { phaseHasStimuli, buildMainBlocks } from '../stimuli.js';
 import { makeBlockEndScreen, makeMandatoryRestScreen } from './block_end.js';
 import { makeSaveTrial } from '../data.js';
+import { preloadConfig } from '../preload_config.js';
 
 function mainIntro() {
   return {
@@ -77,14 +77,12 @@ export function makeMainBlocksTimeline(jsPsych, factories, stimuli, state, pid) 
       });
     }
 
-    const preload = {
-      type: PreloadPlugin,
-      video: trialList.map(s => s.url),
-      show_progress_bar: true,
-      auto_preload: false,
+    const preload = preloadConfig({
+      videos: trialList.map(s => s.url),
       message: `<p>Loading block ${i + 1} clips…</p>`,
-      data: { trial_type_tag: 'preload', phase: 'main', block_index: i },
-    };
+      phase: 'main',
+      blockIndex: i,
+    });
 
     const trials = trialList.map((s, j) => factories.videoTrial(
       { stimulus_id: s.stimulus_id, url: s.url },
