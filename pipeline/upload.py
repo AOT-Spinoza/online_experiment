@@ -70,6 +70,13 @@ def make_client(endpoint: str, access_key: str, secret_key: str, region: str):
             signature_version="s3v4",
             retries={"max_attempts": 5, "mode": "standard"},
             max_pool_connections=64,  # well above worker count
+            # Force path-style addressing (https://<endpoint>/<bucket>/<key>)
+            # rather than virtual-hosted (https://<bucket>.<endpoint>/<key>).
+            # R2 supports both, but boto3's transfer manager sometimes picks
+            # virtual-hosted for PUT while HEAD goes path-style — and the
+            # vhost form fails NoSuchBucket on R2 in some configurations.
+            # Path-style avoids the inconsistency.
+            s3={"addressing_style": "path"},
         ),
     )
 
@@ -188,17 +195,37 @@ def main() -> int:
 
     client = make_client(endpoint, access_key, secret_key, region)
 
-    # Pre-flight: try to HEAD the bucket itself so a misconfigured token /
-    # endpoint fails loudly before we start hammering it with uploads.
+    # Pre-flight: HEAD a sentinel key that we know doesn't exist. We use
+    # head_object rather than head_bucket because R2 API tokens scoped to
+    # "Object Read & Write" don't grant the bucket-level HeadBucket op
+    # (it returns 403 even with valid credentials). HeadObject is in
+    # scope, so we get a clean signal:
+    #   - 404 / NoSuchKey  → bucket reachable, credentials valid (good)
+    #   - 403              → permissions still wrong
+    #   - NoSuchBucket     → bucket name typo
+    #   - connection error → endpoint wrong
     try:
-        client.head_bucket(Bucket=bucket)
+        client.head_object(Bucket=bucket, Key="__upload_preflight_does_not_exist__")
     except ClientError as e:
-        print(f"error: head_bucket({bucket!r}) failed — {e}", file=sys.stderr)
-        print(
-            "       check BUCKET_NAME and that the API token has access to it.",
-            file=sys.stderr,
-        )
-        return 2
+        code = e.response.get("Error", {}).get("Code")
+        status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if code in ("404", "NoSuchKey", "NotFound") or status == 404:
+            pass  # bucket reachable, sentinel key just doesn't exist — perfect
+        elif code in ("NoSuchBucket",) or status == 404:
+            print(f"error: bucket {bucket!r} does not exist on this endpoint.", file=sys.stderr)
+            return 2
+        elif status == 403:
+            print(
+                f"error: 403 from R2 — credentials valid but the API token lacks\n"
+                f"       Object Read+Write on bucket {bucket!r}. In the dashboard:\n"
+                f"       R2 → Manage R2 API Tokens → confirm the scope includes\n"
+                f"       this exact bucket name (or 'Apply to all buckets').",
+                file=sys.stderr,
+            )
+            return 2
+        else:
+            print(f"error: pre-flight HEAD failed — {e}", file=sys.stderr)
+            return 2
 
     def make_key(f: Path) -> str:
         return (args.prefix.rstrip("/") + "/" + f.name).lstrip("/") if args.prefix else f.name
