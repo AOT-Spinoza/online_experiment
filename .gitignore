@@ -19,6 +19,10 @@ pipeline/staging_hashed.tar*
 pipeline/.wrangler/
 .wrangler/
 
+# JATOS deployment bundle — rebuilt from experiment/dist on each deploy
+aot-experiment.zip
+*.zip
+
 # Per-participant exports / saved CSVs — analyst working data, never commit
 analysis/data/
 analysis/*.executed.ipynb
