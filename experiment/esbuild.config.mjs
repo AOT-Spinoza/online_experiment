@@ -34,10 +34,20 @@ function copyStatic() {
       //   - regular directories: skipped (we don't expect any in v1)
       const lst = fs.lstatSync(src);
       if (lst.isSymbolicLink()) {
-        const target = fs.readlinkSync(src);
-        const absoluteTarget = path.resolve(path.dirname(src), target);
-        try { fs.rmSync(dst, { recursive: true, force: true }); } catch {}
-        fs.symlinkSync(absoluteTarget, dst);
+        // Symlinks in public/ are local-dev conveniences (notably the
+        // _videos symlink dev_link.py creates pointing at staging_hashed).
+        // In production builds we skip them — the deployed bundle is
+        // expected to reference videos via the absolute hosted URLs in
+        // stimuli.json, not via a sibling directory.
+        if (isDev) {
+          const target = fs.readlinkSync(src);
+          const absoluteTarget = path.resolve(path.dirname(src), target);
+          try { fs.rmSync(dst, { recursive: true, force: true }); } catch {}
+          fs.symlinkSync(absoluteTarget, dst);
+        } else {
+          // Make sure no stale symlink lingers from a previous dev build.
+          try { fs.rmSync(dst, { recursive: true, force: true }); } catch {}
+        }
       } else if (lst.isFile()) {
         fs.copyFileSync(src, dst);
       }

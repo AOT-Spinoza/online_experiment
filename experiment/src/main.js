@@ -47,8 +47,32 @@ const prolificParams = recordProlificParams(jsPsych);
 const pid = prolificParams.PROLIFIC_PID;
 
 // 2. Load the stimulus manifest. Awaited up-front so all phase builders
-//    can synchronously consume it.
-const stimuli = await loadStimuli();
+//    can synchronously consume it. If the fetch fails (network / CORS /
+//    deployment misconfiguration) we render a participant-visible error
+//    and halt — better than silently skipping every real-clip phase.
+let stimuli;
+try {
+  stimuli = await loadStimuli();
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.error('[main.js] stimulus manifest could not be loaded:', e);
+  document.body.innerHTML = `
+    <div style="padding:40px;font-family:sans-serif;max-width:640px;margin:0 auto;color:#222;">
+      <h2>We're sorry — the experiment can't start.</h2>
+      <p>The list of video clips couldn't be loaded. This usually means a
+         temporary network problem; please refresh in a minute.</p>
+      <p>If you keep seeing this message, please return the study on Prolific
+         (so it doesn't affect your approval rate) and let the researchers
+         know — your time is appreciated.</p>
+      <details style="margin-top:24px;">
+        <summary style="cursor:pointer;color:#666;">Technical detail (for the researchers)</summary>
+        <pre style="background:#f0f0f0;padding:12px;border-radius:4px;
+                    overflow:auto;font-size:12px;">${String(e).replace(/</g, '&lt;')}</pre>
+      </details>
+    </div>`;
+  // Halt: don't run anything else.
+  throw e;
+}
 
 // 3. Per-trial factories close over jsPsych.
 const factories = makeTrialFactories(jsPsych);

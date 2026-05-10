@@ -25,19 +25,35 @@ const MANIFEST_URL = './stimuli.json';
 
 let _loaded = null;
 
-/** Fetch stimuli.json once. Subsequent calls return the cached result. */
+/** Fetch stimuli.json once. Subsequent calls return the cached result.
+ *
+ *  Throws on fetch failure (network error, 404, CORS, malformed JSON, or
+ *  a successfully-loaded file with an empty main pool). The caller is
+ *  expected to catch and render a participant-visible error — silently
+ *  falling back to empty arrays would let the timeline run to debrief
+ *  without ever showing a real trial, which is what happened in the
+ *  student's pilot. */
 export async function loadStimuli() {
   if (_loaded) return _loaded;
   let raw;
+  let res;
   try {
-    const res = await fetch(MANIFEST_URL);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    res = await fetch(MANIFEST_URL);
+  } catch (e) {
+    throw new Error(
+      `Could not reach ${MANIFEST_URL} (network or CORS error). ` +
+      `Underlying error: ${e}`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(`Stimulus manifest HTTP ${res.status} at ${MANIFEST_URL}`);
+  }
+  try {
     raw = await res.json();
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn(`[stimuli.js] could not load ${MANIFEST_URL}:`, e);
-    raw = { main: [], practice: [], qualification: [] };
+    throw new Error(`Stimulus manifest at ${MANIFEST_URL} is not valid JSON: ${e}`);
   }
+
   _loaded = {
     main: Array.isArray(raw.main) ? raw.main : [],
     catch: Array.isArray(raw.catch) ? raw.catch : [],
@@ -50,6 +66,16 @@ export async function loadStimuli() {
     `catch: ${_loaded.catch.length}, ` +
     `practice: ${_loaded.practice.length}, qualification: ${_loaded.qualification.length}`,
   );
+
+  if (_loaded.main.length === 0) {
+    throw new Error(
+      `Stimulus manifest at ${MANIFEST_URL} loaded but the main pool is empty. ` +
+      `This usually means a deployment was bundled before build_manifest.py ` +
+      `wrote the production manifest into experiment/public/stimuli.json. ` +
+      `Run build_manifest.py with --base-url and --public-out, then rebuild.`,
+    );
+  }
+
   return _loaded;
 }
 

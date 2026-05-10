@@ -129,8 +129,14 @@ export function makeTrialFactories(jsPsych) {
     };
   }
 
-  // Brief "Correct" / "Not quite" feedback shown after each practice trial.
-  // Reads the most recent stimulus row to decide what to display.
+  // Brief "Correct" / "Not quite" feedback shown after a practice or
+  // familiarization trial. Reads the most recent stimulus row plus, if
+  // it belongs to the same trial, the most recent confidence row — that
+  // way Layer A combined trials ("Press → for FORWARD, then press 4")
+  // require BOTH presses to be right for "Correct". Practice video
+  // trials don't ship `expected_confidence`, so the confidence row's
+  // `confidence_correct` is undefined and is ignored — the feedback
+  // there falls back to direction-only correctness, as before.
   function feedbackTrial() {
     return {
       type: HtmlKeyboardResponse,
@@ -138,16 +144,34 @@ export function makeTrialFactories(jsPsych) {
       trial_duration: TIMING.feedbackMs,
       data: { trial_type_tag: 'feedback' },
       stimulus: () => {
-        const last = jsPsych.data
+        const lastStim = jsPsych.data
           .get()
           .filter({ trial_type_tag: 'stimulus' })
           .last(1)
           .values()[0];
-        if (!last) return '';
-        if (last.response == null) {
+        if (!lastStim) return '';
+        if (lastStim.response == null) {
           return `<div style="font-size:32px;color:#888;">Too slow</div>`;
         }
-        const ok = last.correct === true;
+        let ok = lastStim.correct === true;
+
+        // For combined trials the confidence response is on a separate
+        // row. If that row exists, belongs to this trial, and reports
+        // confidence_correct === false, the trial is also "not quite".
+        const lastConf = jsPsych.data
+          .get()
+          .filter({ trial_type_tag: 'confidence' })
+          .last(1)
+          .values()[0];
+        if (
+          lastConf
+          && lastConf.block_index === lastStim.block_index
+          && lastConf.trial_index_in_block === lastStim.trial_index_in_block
+          && lastConf.confidence_correct === false
+        ) {
+          ok = false;
+        }
+
         const color = ok ? '#2a8c2a' : '#c43b3b';
         const text = ok ? 'Correct' : 'Not quite';
         return `<div style="font-size:36px;color:${color};">${text}</div>`;
@@ -255,7 +279,7 @@ export function makeTrialFactories(jsPsych) {
   // sluggish. The response window opens immediately on stimulus onset.
   // RT for these trials is therefore measured from text appearance.
   // ------------------------------------------------------------------
-  function htmlInstructionTrial(payload, meta = {}) {
+  function htmlInstructionTrial(payload, meta = {}, options = {}) {
     const { html, expect_direction, expect_confidence } = payload;
     if (!expect_direction && !expect_confidence) {
       throw new Error('htmlInstructionTrial: need expect_direction and/or expect_confidence');
@@ -322,6 +346,15 @@ export function makeTrialFactories(jsPsych) {
           }
         },
       });
+    }
+
+    // Optional immediate feedback ("Correct" / "Not quite"). For Layer A
+    // the participant otherwise gets no signal that they pressed the
+    // wrong key — the trial just advances. The consecutive-fail check
+    // catches persistent confusion, but a one-off slip should still get
+    // a soft signal so the participant learns the mapping.
+    if (options.feedback) {
+      items.push(feedbackTrial());
     }
 
     items.push(itiBlank());

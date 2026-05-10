@@ -62,10 +62,17 @@ export function makeBlockEndScreen(jsPsych, blockIndex, state, sessionStart) {
         .values();
       const thisBlock = allMain.filter(r => r.block_index === blockIndex);
 
-      const dirRts = thisBlock
-        .filter(r => r.direction_rt != null && r.response != null)
-        .map(r => r.direction_rt);
+      const answered = thisBlock.filter(r => r.response != null);
+      const missed = thisBlock.length - answered.length;
+
+      const dirRts = answered.map(r => r.direction_rt).filter(rt => rt != null);
       const medRt = median(dirRts);
+
+      // Lapse heuristic (CLAUDE.md §3.7): direction RT below ~250 ms is
+      // implausibly fast for a real perceptual judgement (probably a key
+      // already held / random tap). Count those as "fast lapses" so the
+      // participant gets a soft signal that something's off.
+      const fastLapses = answered.filter(r => r.direction_rt != null && r.direction_rt < 250).length;
 
       const elapsed = sessionStart != null
         ? performance.now() - sessionStart
@@ -83,13 +90,25 @@ export function makeBlockEndScreen(jsPsych, blockIndex, state, sessionStart) {
            to start the next block. Your data from this block is already
            saved.</p>`;
 
+      // Soft warning lines — only render when there's something to flag,
+      // so the screen stays clean for an attentive participant.
+      let warnings = '';
+      if (missed > 0) {
+        warnings += `<li style="color:#c43b3b;">Missed responses (no key in time): <strong>${missed}</strong></li>`;
+      }
+      if (fastLapses > 0) {
+        warnings += `<li style="color:#c43b3b;">Very fast responses (&lt;250&nbsp;ms): <strong>${fastLapses}</strong></li>`;
+      }
+
       return `
         <h2>${headline}</h2>
         <ul style="list-style:none;padding:0;font-size:18px;line-height:1.7;">
-          <li>Trials this block: <strong>${thisBlock.length}</strong></li>
+          <li>Trials this block: <strong>${thisBlock.length}</strong>
+              (${answered.length} answered, ${missed} missed)</li>
           <li>Median response time: <strong>${medRt != null ? Math.round(medRt) + ' ms' : '—'}</strong></li>
           <li>Elapsed: <strong>${formatMs(elapsed)}</strong></li>
           <li>Trials completed (main): <strong>${allMain.length} / ${STRUCTURE.maxTotalMainTrials}</strong></li>
+          ${warnings}
         </ul>
         ${cta}
       `;

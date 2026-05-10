@@ -87,7 +87,7 @@ export function makeFamiliarizationTimeline(jsPsych, factories, state) {
         phase: 'familiarization',
         block_index: 0,
         trial_index_in_block: i,
-      }),
+      }, { feedback: true }),
     );
     // After each trial, check the last K stimulus rows. If they're all
     // wrong (direction-wise), set the fail flag and abort the rest.
