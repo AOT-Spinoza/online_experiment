@@ -129,6 +129,33 @@ export function makeTrialFactories(jsPsych) {
     };
   }
 
+  // "Too slow — please respond more quickly." Conditional sub-trial that
+  // fires whenever the most recent stimulus row has no response (i.e. the
+  // participant timed out on the direction window). Safe in every phase —
+  // including main blocks — because we're only flagging the absence of a
+  // response, not anything about its correctness, so no ground truth leaks.
+  function tooSlowSubTrial() {
+    return {
+      timeline: [
+        {
+          type: HtmlKeyboardResponse,
+          stimulus: `<div style="font-size:32px;color:#c43b3b;">Too slow — please respond more quickly</div>`,
+          choices: 'NO_KEYS',
+          trial_duration: 1200,
+          data: { trial_type_tag: 'too_slow_notice' },
+        },
+      ],
+      conditional_function: () => {
+        const last = jsPsych.data
+          .get()
+          .filter({ trial_type_tag: 'stimulus' })
+          .last(1)
+          .values()[0];
+        return Boolean(last && last.response == null);
+      },
+    };
+  }
+
   // Brief "Correct" / "Not quite" feedback shown after a practice or
   // familiarization trial. Reads the most recent stimulus row plus, if
   // it belongs to the same trial, the most recent confidence row — that
@@ -137,8 +164,11 @@ export function makeTrialFactories(jsPsych) {
   // trials don't ship `expected_confidence`, so the confidence row's
   // `confidence_correct` is undefined and is ignored — the feedback
   // there falls back to direction-only correctness, as before.
+  //
+  // Wrapped in a conditional sub-timeline so missed-response trials are
+  // skipped entirely — those are handled by tooSlowSubTrial instead.
   function feedbackTrial() {
-    return {
+    const inner = {
       type: HtmlKeyboardResponse,
       choices: 'NO_KEYS',
       trial_duration: TIMING.feedbackMs,
@@ -150,9 +180,6 @@ export function makeTrialFactories(jsPsych) {
           .last(1)
           .values()[0];
         if (!lastStim) return '';
-        if (lastStim.response == null) {
-          return `<div style="font-size:32px;color:#888;">Too slow</div>`;
-        }
         let ok = lastStim.correct === true;
 
         // For combined trials the confidence response is on a separate
@@ -175,6 +202,19 @@ export function makeTrialFactories(jsPsych) {
         const color = ok ? '#2a8c2a' : '#c43b3b';
         const text = ok ? 'Correct' : 'Not quite';
         return `<div style="font-size:36px;color:${color};">${text}</div>`;
+      },
+    };
+    return {
+      timeline: [inner],
+      conditional_function: () => {
+        // Skip feedback on missed-response trials — tooSlowSubTrial
+        // handled the participant-visible message for those.
+        const last = jsPsych.data
+          .get()
+          .filter({ trial_type_tag: 'stimulus' })
+          .last(1)
+          .values()[0];
+        return Boolean(last && last.response != null);
       },
     };
   }
@@ -253,6 +293,11 @@ export function makeTrialFactories(jsPsych) {
     };
 
     const items = [startPrompt(), videoPlay, responsePrompt];
+    // Soft "Too slow" reminder when the direction window expired without a
+    // response. Fires in EVERY phase (no ground truth leak — it only flags
+    // the missed response itself). Confidence sub-trial below then skips
+    // for missed trials via its own conditional.
+    items.push(tooSlowSubTrial());
     if (askConfidence) {
       items.push(confidenceSubTrial({ stimulus_id, ...meta }));
     }
@@ -348,11 +393,17 @@ export function makeTrialFactories(jsPsych) {
       });
     }
 
+    // Soft "Too slow" reminder when the participant missed the response
+    // window (no ground truth leaked — only flags absence of a response).
+    items.push(tooSlowSubTrial());
+
     // Optional immediate feedback ("Correct" / "Not quite"). For Layer A
     // the participant otherwise gets no signal that they pressed the
     // wrong key — the trial just advances. The consecutive-fail check
     // catches persistent confusion, but a one-off slip should still get
-    // a soft signal so the participant learns the mapping.
+    // a soft signal so the participant learns the mapping. The feedback
+    // sub-trial skips itself on missed-response rows so we don't double
+    // up with the too-slow notice.
     if (options.feedback) {
       items.push(feedbackTrial());
     }

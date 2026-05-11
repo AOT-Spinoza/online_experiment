@@ -28,7 +28,7 @@ export const CONFIDENCE_LABELS = [
 // prompt's onset. The confidence prompt is participant-paced — no timeout.
 export const TIMING = {
   videoMs: 2500,
-  directionResponseWindowMs: 2000,
+  directionResponseWindowMs: 3000,
   // Familiarization HTML stimuli are shown for the same duration as a real
   // video so the response window opens at the same offset participants
   // experience throughout.
