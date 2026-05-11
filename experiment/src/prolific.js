@@ -88,23 +88,22 @@ export function endSession(jsPsych, codeKey, { delayMs = 1500 } = {}) {
   const code = COMPLETION_CODES[codeKey];
 
   // Under JATOS: hand control over to JATOS, which submits the result
-  // data and either redirects (Prolific completion URL) or shows a
-  // "study aborted" page (for browserRejected with no Prolific code).
-  // We still call jsPsych.abortExperiment so any queued trials are
-  // dropped — JATOS's redirect can take a moment.
+  // data and handles the Prolific redirect *itself*. The Prolific
+  // completion code lives in JATOS's study configuration, NOT in this
+  // bundle — so we deliberately do NOT pass a code or redirect URL
+  // here. Two reasons:
+  //   1) The code never ships to the participant, so it can't be
+  //      extracted from the HTML/JS bundle to claim completion
+  //      without doing the experiment.
+  //   2) Codes can be rotated in the JATOS dashboard without a
+  //      redeploy of the experiment bundle.
+  // The codeKey is passed through as an errorMsg on non-finished
+  // paths so the JATOS dashboard surfaces the exit reason.
   if (isUnderJatos()) {
     const csv = jsPsych.data.get().csv();
     const successful = codeKey === 'finished';
-    const errMsg = successful ? null : codeKey;
-    if (code) {
-      const redirectUrl = buildCompletionUrl(code);
-      window.jatos.endStudyAndRedirect(redirectUrl, csv, successful, errMsg);
-    } else {
-      // No Prolific completion URL (browserRejected) — end without redirect;
-      // the participant can close the tab / return the study on Prolific.
-      window.jatos.endStudy(csv, false, errMsg);
-    }
-    jsPsych.abortExperiment(renderRedirectingPage(code ?? 'JATOS_END'));
+    window.jatos.endStudy(csv, successful, successful ? null : codeKey);
+    jsPsych.abortExperiment(renderRedirectingPage('JATOS_END'));
     return;
   }
 

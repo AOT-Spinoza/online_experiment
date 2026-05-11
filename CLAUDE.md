@@ -464,7 +464,7 @@ Still open:
 1. **Hosting** — pending university IT contact. Once you know what's available (uni-provided object storage, Cloudflare R2, AWS, etc.), come back and we'll lock §2.5 / §3.2.
 2. **DataPipe + OSF accounts** — pending; both free, can be set up by you in ~30 min. Required before deployment.
 3. **Browser/device check screen** — `@jspsych/plugin-browser-check` is in `package.json` but not yet wired into the timeline. To add: minimum viewport 1024×600, desktop only, modern Chromium/Firefox/Safari (§3.3 phase 4).
-4. **Real Prolific completion codes** — currently `PLACEHOLDER_*`. Fill in from the Prolific study dashboard before deployment (in `experiment/src/config.js` `COMPLETION_CODES`).
+4. **Real Prolific completion codes** — for the JATOS deployment path (which is what we're using), the completion code is configured **in the JATOS study settings**, not in this bundle. `experiment/src/config.js` `COMPLETION_CODES` only matters if you ever deploy without JATOS. Keeping codes server-side in JATOS prevents extraction from the client and lets you rotate them without a redeploy.
 
 ## 7. Things explicitly out of scope (for v1)
 

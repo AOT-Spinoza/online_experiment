@@ -80,9 +80,19 @@ export const CATCH_TRIAL_BONUS = {
 export const DATAPIPE_EXPERIMENT_ID = 'XXXXXXXXXXXX';
 
 // -- Prolific completion codes -------------------------------------------
-// Filled in from the Prolific study dashboard before deployment. Keeping
-// these as obvious placeholders so a forgotten edit fails loudly: Prolific
-// will reject 'PLACEHOLDER_*' codes and we'll see it instantly.
+//
+// **For JATOS deployments these are NOT used.** Under JATOS, the Prolific
+// completion code lives in JATOS's study configuration (not in this
+// bundle), and JATOS handles the redirect itself when we call
+// jatos.endStudy(). This keeps the codes off the client so a participant
+// can't extract one from the HTML/JS and claim completion without doing
+// the experiment.
+//
+// These placeholders are kept only for the **non-JATOS** code path
+// (direct Prolific deployment via GitHub Pages / Cloudflare Pages /
+// similar). Fill them in from the Prolific study dashboard if you ever
+// deploy without JATOS. The 'PLACEHOLDER_*' values are designed to
+// fail loudly on Prolific if shipped accidentally.
 export const COMPLETION_CODES = {
   finished:              'PLACEHOLDER_FINISHED',
   familiarizationFailed: 'PLACEHOLDER_FAMFAIL',
