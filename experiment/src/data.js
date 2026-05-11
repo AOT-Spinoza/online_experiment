@@ -14,6 +14,7 @@ import jsPsychPipe from '@jspsych-contrib/plugin-pipe';
 import CallFunction from '@jspsych/plugin-call-function';
 
 import { DATAPIPE_EXPERIMENT_ID } from './config.js';
+import { isUnderJatos } from './jatos_helper.js';
 
 const PLACEHOLDER_ID = 'XXXXXXXXXXXX';
 
@@ -81,43 +82,82 @@ function saveToLocalStorage(jsPsych, pid, suffix) {
 export function makeSaveTrial(jsPsych, pid, suffix) {
   const filename = `${pid}_${suffix}.csv`;
 
-  // Always run a localStorage backup right before the network save attempt.
+  // Always run a localStorage backup right before any network save.
   const localBackup = {
     type: CallFunction,
     func: () => saveToLocalStorage(jsPsych, pid, suffix),
     data: { trial_type_tag: 'save_local', save_suffix: suffix },
   };
 
-  if (!isDataPipeConfigured()) {
-    // Pure local mode — no network call.
+  // 1) Under JATOS: submit the (cumulative) CSV via jatos.submitResultData.
+  //    submitResultData REPLACES the stored result data, so each per-block
+  //    call leaves the JATOS server holding the latest cumulative state —
+  //    matching the semantics of the DataPipe-action='save' branch below.
+  //    The async callback pattern (`(done) => ...; done()`) is required by
+  //    plugin-call-function whenever `async: true` is set.
+  if (isUnderJatos()) {
     return {
       timeline: [
         localBackup,
         {
           type: CallFunction,
-          func: () => {
-            // eslint-disable-next-line no-console
-            console.info(
-              `[data.js] DataPipe not configured (DATAPIPE_EXPERIMENT_ID is the ` +
-              `placeholder); skipping network save for "${filename}".`,
+          async: true,
+          func: (done) => {
+            const csv = jsPsych.data.get().csv();
+            window.jatos.submitResultData(
+              csv,
+              () => {
+                // eslint-disable-next-line no-console
+                console.info(
+                  `[data.js] jatos.submitResultData OK (${suffix}, ${csv.length} bytes)`,
+                );
+                done();
+              },
+              (err) => {
+                // eslint-disable-next-line no-console
+                console.error(`[data.js] jatos.submitResultData failed (${suffix}):`, err);
+                // Don't block the timeline — localStorage backup ran first.
+                done();
+              },
             );
           },
-          data: { trial_type_tag: 'save_skipped', save_suffix: suffix },
+          data: { trial_type_tag: 'save_jatos', save_suffix: suffix },
         },
       ],
     };
   }
 
+  // 2) Not under JATOS, DataPipe configured: push via plugin-pipe.
+  if (isDataPipeConfigured()) {
+    return {
+      timeline: [
+        localBackup,
+        {
+          type: jsPsychPipe,
+          action: 'save',
+          experiment_id: DATAPIPE_EXPERIMENT_ID,
+          filename,
+          data_string: () => jsPsych.data.get().csv(),
+          data: { trial_type_tag: 'save_remote', save_suffix: suffix },
+        },
+      ],
+    };
+  }
+
+  // 3) Pure local-dev mode — no network call, only localStorage.
   return {
     timeline: [
       localBackup,
       {
-        type: jsPsychPipe,
-        action: 'save',
-        experiment_id: DATAPIPE_EXPERIMENT_ID,
-        filename,
-        data_string: () => jsPsych.data.get().csv(),
-        data: { trial_type_tag: 'save_remote', save_suffix: suffix },
+        type: CallFunction,
+        func: () => {
+          // eslint-disable-next-line no-console
+          console.info(
+            `[data.js] No JATOS, DataPipe not configured (DATAPIPE_EXPERIMENT_ID ` +
+            `is still the placeholder); skipping network save for "${filename}".`,
+          );
+        },
+        data: { trial_type_tag: 'save_skipped', save_suffix: suffix },
       },
     ],
   };

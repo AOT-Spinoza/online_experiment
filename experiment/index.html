@@ -10,6 +10,17 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <!--
+      jatos.js is provided automatically by the JATOS server when this
+      study is served via /publix/<id>/start — it appears alongside our
+      other static assets and the relative `jatos.js` resolves to it.
+      When the bundle is served from anywhere else (esbuild dev server,
+      GitHub Pages, etc.) this file simply 404s; window.jatos stays
+      undefined and main.js falls back to the DataPipe + Prolific
+      redirect path. A single 404 in the local-dev console is the
+      cosmetic cost of keeping one bundle for both deployments.
+    -->
+    <script src="jatos.js"></script>
     <script type="module" src="./experiment.bundle.js"></script>
   </body>
 </html>

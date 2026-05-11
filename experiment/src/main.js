@@ -25,6 +25,7 @@ import { KEYS } from './config.js';
 import { recordProlificParams, endSession } from './prolific.js';
 import { loadStimuli } from './stimuli.js';
 import { makeSaveTrial } from './data.js';
+import { isUnderJatos, whenJatosReady } from './jatos_helper.js';
 
 import { makeTrialFactories } from './trials/trial_factory.js';
 import { makeConsentTrial } from './trials/consent.js';
@@ -40,6 +41,14 @@ const jsPsych = initJsPsych({
   // a CallFunction trial at the end of the timeline so it sequences after
   // the final data-save trial. See CLAUDE.md §3.8.
 });
+
+// Everything below runs after JATOS finishes initialising (when running
+// under JATOS) or immediately (when running on localhost / GitHub Pages).
+// whenJatosReady is a no-op outside JATOS, so the non-JATOS path doesn't
+// pay any cost for the wrap.
+whenJatosReady(async () => {
+  // eslint-disable-next-line no-console
+  console.info(`[main.js] under JATOS: ${isUnderJatos()}`);
 
 // 1. Capture Prolific IDs (or generate a LOCAL_* fallback for dev) before
 //    any trial runs, so every saved row carries them.
@@ -187,3 +196,4 @@ timeline.push(finalSave);
 timeline.push(finish);
 
 await jsPsych.run(timeline);
+}); // close whenJatosReady

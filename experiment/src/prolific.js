@@ -14,6 +14,7 @@
 //      short delay; locally it shows a debug-friendly page instead.
 
 import { COMPLETION_CODES } from './config.js';
+import { isUnderJatos } from './jatos_helper.js';
 
 const PROLIFIC_PARAMS = ['PROLIFIC_PID', 'STUDY_ID', 'SESSION_ID'];
 
@@ -85,6 +86,27 @@ export function endSession(jsPsych, codeKey, { delayMs = 1500 } = {}) {
     return;
   }
   const code = COMPLETION_CODES[codeKey];
+
+  // Under JATOS: hand control over to JATOS, which submits the result
+  // data and either redirects (Prolific completion URL) or shows a
+  // "study aborted" page (for browserRejected with no Prolific code).
+  // We still call jsPsych.abortExperiment so any queued trials are
+  // dropped — JATOS's redirect can take a moment.
+  if (isUnderJatos()) {
+    const csv = jsPsych.data.get().csv();
+    const successful = codeKey === 'finished';
+    const errMsg = successful ? null : codeKey;
+    if (code) {
+      const redirectUrl = buildCompletionUrl(code);
+      window.jatos.endStudyAndRedirect(redirectUrl, csv, successful, errMsg);
+    } else {
+      // No Prolific completion URL (browserRejected) — end without redirect;
+      // the participant can close the tab / return the study on Prolific.
+      window.jatos.endStudy(csv, false, errMsg);
+    }
+    jsPsych.abortExperiment(renderRedirectingPage(code ?? 'JATOS_END'));
+    return;
+  }
 
   let html;
   if (!isUnderProlific(jsPsych)) {
