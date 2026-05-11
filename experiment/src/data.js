@@ -16,6 +16,19 @@ import CallFunction from '@jspsych/plugin-call-function';
 import { DATAPIPE_EXPERIMENT_ID } from './config.js';
 import { isUnderJatos } from './jatos_helper.js';
 
+// Columns to strip from saved data. These are either bulky HTML (the
+// `stimulus` column carries the literal HTML of instruction prompts and
+// response screens) or otherwise redundant with our own fields
+// (`stimulus_id` already names the clip, so we don't need the URL list).
+// Strip happens via DataCollection.ignore() so the in-memory data store
+// is untouched — only the serialized CSV/JSON loses these columns.
+const IGNORED_DATA_COLUMNS = ['stimulus'];
+
+/** Serialise the jsPsych data store to CSV, omitting bulky HTML columns. */
+export function getCleanCsv(jsPsych) {
+  return jsPsych.data.get().ignore(IGNORED_DATA_COLUMNS).csv();
+}
+
 const PLACEHOLDER_ID = 'XXXXXXXXXXXX';
 
 function isDataPipeConfigured() {
@@ -51,7 +64,7 @@ if (typeof window !== 'undefined') {
  *  with quota 0); we log and move on. */
 function saveToLocalStorage(jsPsych, pid, suffix) {
   try {
-    const csv = jsPsych.data.get().csv();
+    const csv = getCleanCsv(jsPsych);
     const key = `aot_${pid}_${suffix}`;
     localStorage.setItem(key, csv);
     // eslint-disable-next-line no-console
@@ -89,12 +102,23 @@ export function makeSaveTrial(jsPsych, pid, suffix) {
     data: { trial_type_tag: 'save_local', save_suffix: suffix },
   };
 
-  // 1) Under JATOS: submit the (cumulative) CSV via jatos.submitResultData.
-  //    submitResultData REPLACES the stored result data, so each per-block
-  //    call leaves the JATOS server holding the latest cumulative state —
-  //    matching the semantics of the DataPipe-action='save' branch below.
-  //    The async callback pattern (`(done) => ...; done()`) is required by
-  //    plugin-call-function whenever `async: true` is set.
+  // 1) Under JATOS: do BOTH
+  //
+  //    a) jatos.submitResultData(csv) — overwrites the result's primary
+  //       data with the latest cumulative CSV. This is what JATOS's
+  //       default "Export Results" dump uses, so a researcher who just
+  //       wants the cumulative session can use the default workflow.
+  //    b) jatos.uploadResultFile(csv, filename) — uploads a separately-
+  //       named file (e.g. `LOCAL_xyz_block0.csv`) alongside the primary,
+  //       visible in the result's "Files" tab. This gives per-block,
+  //       per-PID granularity with stable, distinct filenames on the
+  //       JATOS side — no "data.txt collides with another data.txt"
+  //       problem on local download.
+  //
+  //    We Promise.all both so the trial advances only after both
+  //    network ops finish (success or error). The async callback
+  //    pattern is required by plugin-call-function whenever
+  //    `async: true` is set.
   if (isUnderJatos()) {
     return {
       timeline: [
@@ -103,25 +127,41 @@ export function makeSaveTrial(jsPsych, pid, suffix) {
           type: CallFunction,
           async: true,
           func: (done) => {
-            const csv = jsPsych.data.get().csv();
-            window.jatos.submitResultData(
-              csv,
-              () => {
-                // eslint-disable-next-line no-console
-                console.info(
-                  `[data.js] jatos.submitResultData OK (${suffix}, ${csv.length} bytes)`,
-                );
-                done();
-              },
-              (err) => {
-                // eslint-disable-next-line no-console
-                console.error(`[data.js] jatos.submitResultData failed (${suffix}):`, err);
-                // Don't block the timeline — localStorage backup ran first.
-                done();
-              },
-            );
+            const csv = getCleanCsv(jsPsych);
+            const submit = new Promise((resolve) => {
+              window.jatos.submitResultData(
+                csv,
+                () => {
+                  // eslint-disable-next-line no-console
+                  console.info(`[data.js] jatos.submitResultData OK (${suffix}, ${csv.length} bytes)`);
+                  resolve(true);
+                },
+                (err) => {
+                  // eslint-disable-next-line no-console
+                  console.error(`[data.js] jatos.submitResultData failed (${suffix}):`, err);
+                  resolve(false);
+                },
+              );
+            });
+            const upload = new Promise((resolve) => {
+              window.jatos.uploadResultFile(
+                csv,
+                filename,
+                () => {
+                  // eslint-disable-next-line no-console
+                  console.info(`[data.js] jatos.uploadResultFile OK (${filename})`);
+                  resolve(true);
+                },
+                (err) => {
+                  // eslint-disable-next-line no-console
+                  console.error(`[data.js] jatos.uploadResultFile failed (${filename}):`, err);
+                  resolve(false);
+                },
+              );
+            });
+            Promise.all([submit, upload]).then(() => done());
           },
-          data: { trial_type_tag: 'save_jatos', save_suffix: suffix },
+          data: { trial_type_tag: 'save_jatos', save_suffix: suffix, save_filename: filename },
         },
       ],
     };
@@ -137,7 +177,7 @@ export function makeSaveTrial(jsPsych, pid, suffix) {
           action: 'save',
           experiment_id: DATAPIPE_EXPERIMENT_ID,
           filename,
-          data_string: () => jsPsych.data.get().csv(),
+          data_string: () => getCleanCsv(jsPsych),
           data: { trial_type_tag: 'save_remote', save_suffix: suffix },
         },
       ],

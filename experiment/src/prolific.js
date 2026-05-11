@@ -15,6 +15,7 @@
 
 import { COMPLETION_CODES } from './config.js';
 import { isUnderJatos } from './jatos_helper.js';
+import { getCleanCsv } from './data.js';
 
 const PROLIFIC_PARAMS = ['PROLIFIC_PID', 'STUDY_ID', 'SESSION_ID'];
 
@@ -100,7 +101,7 @@ export function endSession(jsPsych, codeKey, { delayMs = 1500 } = {}) {
   // The codeKey is passed through as an errorMsg on non-finished
   // paths so the JATOS dashboard surfaces the exit reason.
   if (isUnderJatos()) {
-    const csv = jsPsych.data.get().csv();
+    const csv = getCleanCsv(jsPsych);
     const successful = codeKey === 'finished';
     window.jatos.endStudy(csv, successful, successful ? null : codeKey);
     jsPsych.abortExperiment(renderRedirectingPage('JATOS_END'));
