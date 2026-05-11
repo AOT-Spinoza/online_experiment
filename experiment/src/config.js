@@ -40,20 +40,45 @@ export const TIMING = {
   mandatoryRestMs: 30 * 1000,
 };
 
+// -- Test mode ------------------------------------------------------------
+// Append `?test=1` to the study URL to switch to a heavily-shortened
+// version that runs end-to-end in ~10 min: 4 main blocks of 20 trials
+// each (19 real + 1 catch), short practice/qualification. Use this to
+// dry-run the whole experiment without burning 45 min per iteration.
+//
+// Prolific URL params (PROLIFIC_PID, STUDY_ID, SESSION_ID) coexist with
+// `?test=1` — just chain them: `...&test=1`. The flag is logged loudly
+// in the console so it's hard to deploy with test mode on by accident,
+// and the welcome screen shows a visible TEST-MODE banner.
+function detectTestMode() {
+  if (typeof window === 'undefined') return false;
+  const v = new URLSearchParams(window.location.search).get('test');
+  if (v == null) return false;
+  return v !== '0' && v !== 'false';
+}
+export const TEST_MODE = detectTestMode();
+
 // -- Block structure ------------------------------------------------------
 // CLAUDE.md §3.3: 4 main blocks of 100 trials (95 real + 5 catch),
-// mandatory rest between blocks 2 and 3, soft 1-hour cap as a runaway-
+// mandatory rest between blocks 2 and 3, soft 90-min cap as a runaway-
 // session safety net (the typical session is ~45 min; the cap exists so
 // a participant who falls asleep on the confidence prompt doesn't spin
 // indefinitely).
-export const STRUCTURE = {
+//
+// The cap is intentionally generous — it should ONLY fire for a stalled
+// session, never for a slow-but-attentive participant. An earlier 60-min
+// cap was tight enough that a slow-paced pilot participant tripped it
+// and lost block 4 silently. 90 min covers the slowest plausible normal
+// session and still catches a sleeping participant within an hour of
+// their last response.
+const FULL_STRUCTURE = {
   mainBlocks: 4,
   trialsPerMainBlock: 100,
   realTrialsPerMainBlock: 95,
   catchTrialsPerMainBlock: 5,
   // Hard caps; the loop terminates when EITHER is hit.
   maxTotalMainTrials: 400,
-  maxSessionMs: 60 * 60 * 1000,
+  maxSessionMs: 90 * 60 * 1000,
   // Pre-experiment screening (CLAUDE.md §3.4).
   practiceTrials: 12,
   practiceCatchTrials: 1,            // 1 catch trial in Layer B for exposure
@@ -62,6 +87,34 @@ export const STRUCTURE = {
   familiarizationTrials: 8,          // mixed: 2 direction, 2 confidence, 4 combined
   familiarizationMaxConsecutiveErrors: 2,
 };
+
+// Test-mode overrides. We don't touch maxSessionMs (90 min is plenty) or
+// the familiarization payload (Layer A is text-only and fast already).
+// `mainBlocks` stays 4 so the mid-experiment rest screen still appears
+// in the same place — that flow itself is worth dry-running.
+const TEST_OVERRIDES = {
+  trialsPerMainBlock: 20,
+  realTrialsPerMainBlock: 19,
+  catchTrialsPerMainBlock: 1,
+  maxTotalMainTrials: 80,
+  practiceTrials: 4,
+  practiceCatchTrials: 1,
+  qualificationTrials: 4,
+};
+
+export const STRUCTURE = TEST_MODE
+  ? { ...FULL_STRUCTURE, ...TEST_OVERRIDES }
+  : FULL_STRUCTURE;
+
+if (TEST_MODE && typeof window !== 'undefined') {
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[config.js] TEST MODE ACTIVE (URL has ?test=1). ' +
+    `${STRUCTURE.mainBlocks}×${STRUCTURE.trialsPerMainBlock} main, ` +
+    `${STRUCTURE.practiceTrials} practice, ${STRUCTURE.qualificationTrials} qualification. ` +
+    'Remove `?test=1` for the full-length production run.',
+  );
+}
 
 // -- Catch-trial bonus ----------------------------------------------------
 // CLAUDE.md §3.9: payment bonus contingent on offline catch-trial pass rate.

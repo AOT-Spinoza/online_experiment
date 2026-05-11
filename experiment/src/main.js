@@ -21,7 +21,7 @@ import 'jspsych/css/jspsych.css';
 import HtmlKeyboardResponse from '@jspsych/plugin-html-keyboard-response';
 import CallFunction from '@jspsych/plugin-call-function';
 
-import { KEYS } from './config.js';
+import { KEYS, STRUCTURE, TEST_MODE } from './config.js';
 import { recordProlificParams, endSession } from './prolific.js';
 import { loadStimuli } from './stimuli.js';
 import { makeSaveTrial } from './data.js';
@@ -102,15 +102,27 @@ const state = {
 
 // ----- timeline pieces -------------------------------------------------
 
+const testBanner = TEST_MODE
+  ? `<div style="background:#ffe9a8;border:1px solid #c79b00;color:#5a4400;
+                padding:10px 14px;border-radius:6px;margin:0 0 18px;font-size:14px;">
+       <strong>TEST MODE</strong> — shortened run
+       (${STRUCTURE.mainBlocks}×${STRUCTURE.trialsPerMainBlock} main trials,
+       ${STRUCTURE.practiceTrials} practice, ${STRUCTURE.qualificationTrials} qualification).
+       Remove <code>?test=1</code> from the URL for the full-length production run.
+     </div>`
+  : '';
+
 const welcome = {
   type: HtmlKeyboardResponse,
   stimulus: `
+    ${testBanner}
     <h1>Arrow of Time experiment</h1>
     <p>You'll be watching short video clips and judging whether each one is
     playing forward or backward.</p>
-    <p>The session will take roughly <strong>45 minutes</strong>. We'll walk
-    through the task before any real trials, and you can stop after any of
-    the main blocks.</p>
+    <p>The session will take roughly <strong>${TEST_MODE ? '10' : '45'} minutes</strong>.
+    We'll walk through the task before any real trials. Once the main blocks
+    begin we ask you to complete all ${STRUCTURE.mainBlocks} of them in one
+    sitting — there's a forced break partway through.</p>
     <p>Captured PID: <code>${pid}</code></p>
     <p>Press <span class="key-cap">SPACE</span> to begin.</p>
   `,
@@ -118,7 +130,7 @@ const welcome = {
   on_load() {
     state._sessionStart = performance.now();
   },
-  data: { trial_type_tag: 'welcome' },
+  data: { trial_type_tag: 'welcome', test_mode: TEST_MODE },
 };
 
 // --- Informed consent and its decline-gate ---

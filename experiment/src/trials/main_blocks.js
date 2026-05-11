@@ -29,13 +29,19 @@ import { makeSaveTrial } from '../data.js';
 import { preloadConfig } from '../preload_config.js';
 
 function mainIntro() {
+  // Rough wall-time estimate per block: 2.5 s video + ~3 s direction
+  // window (worst case) + ~1.5 s confidence + 0.5 s ITI + 0.5 s start
+  // prompt ≈ 8 s / trial. Round to the nearest minute.
+  const minsPerBlock = Math.max(1, Math.round(STRUCTURE.trialsPerMainBlock * 8 / 60));
   return {
     type: HtmlKeyboardResponse,
     stimulus: `
       <h2>The experiment starts now</h2>
       <p>Practice is over. From this point on, <strong>your responses
       count</strong>. There are <strong>${STRUCTURE.mainBlocks} blocks</strong>
-      of about 10 minutes each, with a short break between blocks 2 and 3.</p>
+      of about ${minsPerBlock} minute${minsPerBlock === 1 ? '' : 's'} each
+      (${STRUCTURE.trialsPerMainBlock} trials per block), with a short
+      break between blocks 2 and 3.</p>
       <p>The flow is the same as in practice:
       <span class="key-cap">SPACE</span> to start each clip,
       <span class="key-cap">←</span>/<span class="key-cap">→</span>
