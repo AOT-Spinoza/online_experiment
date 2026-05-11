@@ -110,12 +110,19 @@ def load_session(
     for analysis: direction response, RT, confidence, confidence RT.
     """
     p = Path(path)
+    # JATOS exports per-session result data as `data.txt` even though the
+    # content is CSV. Sniff by first byte rather than relying on the
+    # extension — '{' or '[' → JSON, anything else → assume CSV.
     if p.suffix.lower() == '.json':
         df = _load_from_json_bundle(p, session_pid=session_pid)
-    elif p.suffix.lower() == '.csv':
-        df = pd.read_csv(p)
     else:
-        raise ValueError(f"unsupported extension: {p.suffix} (expected .json or .csv)")
+        with p.open() as f:
+            first = f.read(1)
+        if first in ('{', '['):
+            df = _load_from_json_bundle(p, session_pid=session_pid)
+        else:
+            df = pd.read_csv(p)
+            df.attrs['source_file'] = str(p)
     return merge_confidence_into_stimulus(df)
 
 
