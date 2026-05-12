@@ -1,29 +1,34 @@
-// Prolific integration helpers.
+// Prolific URL-param capture + end-of-session handoff.
 //
-// Two responsibilities:
+// Production deployment path is JATOS: JATOS owns the Prolific
+// completion code (kept off the client so it can't be extracted from
+// the JS bundle) and runs the Prolific redirect itself when we call
+// `jatos.endStudy()`. This file therefore has no Prolific-redirect
+// logic of its own — that would race with JATOS's normal ending
+// procedure and risk leaving the study marked as incomplete or losing
+// the final data submission.
 //
-//   1. Capture PROLIFIC_PID, STUDY_ID, SESSION_ID from the landing URL and
-//      attach them to jsPsych's global data so every saved row carries them.
-//      In the Prolific dashboard the study URL is configured as e.g.:
-//        https://example.com/aot/?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
-//      Prolific replaces those placeholders before opening the page.
+// Two responsibilities remain:
 //
-//   2. End the session: replace the page body with an appropriate end
-//      message AND halt the jsPsych timeline so no further trials run.
-//      Under Prolific this also redirects to the completion URL after a
-//      short delay; locally it shows a debug-friendly page instead.
+//   1. **Capture PROLIFIC_PID, STUDY_ID, SESSION_ID from the landing
+//      URL** and attach them to jsPsych's global data so every saved
+//      row carries them. In the Prolific dashboard the JATOS study
+//      URL is configured as e.g.:
+//        https://jatos.example.edu/publix/.../start?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
+//      Prolific replaces those placeholders before opening the page,
+//      JATOS proxies the URL params through to the experiment HTML.
+//
+//   2. **End the session**: under JATOS, hand control over to JATOS
+//      (which submits the final data and redirects to Prolific);
+//      locally, show a debug-friendly page summarising what was
+//      captured. In both cases also halt the jsPsych timeline via
+//      `abortExperiment` so any queued trials don't render.
 
-import { COMPLETION_CODES } from './config.js';
+import { END_REASONS } from './config.js';
 import { isUnderJatos } from './jatos_helper.js';
 import { getCleanCsv } from './data.js';
 
 const PROLIFIC_PARAMS = ['PROLIFIC_PID', 'STUDY_ID', 'SESSION_ID'];
-
-/** True if the experiment was launched from a Prolific study link
- *  (i.e. PROLIFIC_PID is present in the URL). */
-export function isUnderProlific(jsPsych) {
-  return Boolean(jsPsych.data.getURLVariable('PROLIFIC_PID'));
-}
 
 /** Read URL search params relevant to Prolific. Missing keys are absent
  *  in the returned object, not `null`. */
@@ -58,68 +63,47 @@ export function recordProlificParams(jsPsych) {
   return params;
 }
 
-function buildCompletionUrl(code) {
-  return `https://app.prolific.com/submissions/complete?cc=${encodeURIComponent(code)}`;
-}
-
 /** End the session.
  *
- *  Under Prolific: shows a "saving..." page and redirects to the completion
- *  URL after `delayMs`.
- *  Locally: shows a debug page summarising the captured data.
- *  In both cases: halts the jsPsych timeline via `abortExperiment` so any
- *  trials that were still queued are skipped.
+ *  Under JATOS: submit the cumulative CSV via `jatos.endStudy` and let
+ *  JATOS do the Prolific redirect itself. The Prolific completion code
+ *  lives in JATOS's study settings — NOT in this bundle. Two reasons:
+ *    1) The code never ships to the participant, so it can't be
+ *       extracted from the HTML/JS bundle to claim completion without
+ *       doing the experiment.
+ *    2) Codes can be rotated in the JATOS dashboard without a redeploy.
+ *  Non-`finished` reasons are passed as `errorMsg` so the JATOS
+ *  dashboard surfaces the exit reason.
  *
- *  @param jsPsych - the jsPsych instance
- *  @param codeKey - one of the keys in COMPLETION_CODES (e.g. 'finished',
- *                   'qualificationFailed'). A null code shows a dead-end
- *                   thank-you page (no Prolific submission); use this for
- *                   browser-check rejections so the participant can return
- *                   the study without affecting their approval rate.
- *  @param opts.delayMs - how long to show the "saving..." page before the
- *                        actual redirect (default 1500 ms).
+ *  Locally (no JATOS): show a debug-friendly page summarising the
+ *  captured data. The participant-facing path doesn't exist outside
+ *  JATOS for the production bundle — local dev is the only non-JATOS
+ *  consumer of this code path.
+ *
+ *  @param jsPsych   - the jsPsych instance
+ *  @param reasonKey - one of the keys in END_REASONS (e.g. 'finished',
+ *                     'qualificationFailed', 'browserRejected').
  */
-export function endSession(jsPsych, codeKey, { delayMs = 1500 } = {}) {
-  if (!(codeKey in COMPLETION_CODES)) {
+export function endSession(jsPsych, reasonKey) {
+  if (!END_REASONS.has(reasonKey)) {
     jsPsych.abortExperiment(
-      `<pre>endSession: unknown completion code key: ${codeKey}</pre>`,
+      `<pre>endSession: unknown end-reason key: ${reasonKey}</pre>`,
     );
     return;
   }
-  const code = COMPLETION_CODES[codeKey];
 
-  // Under JATOS: hand control over to JATOS, which submits the result
-  // data and handles the Prolific redirect *itself*. The Prolific
-  // completion code lives in JATOS's study configuration, NOT in this
-  // bundle — so we deliberately do NOT pass a code or redirect URL
-  // here. Two reasons:
-  //   1) The code never ships to the participant, so it can't be
-  //      extracted from the HTML/JS bundle to claim completion
-  //      without doing the experiment.
-  //   2) Codes can be rotated in the JATOS dashboard without a
-  //      redeploy of the experiment bundle.
-  // The codeKey is passed through as an errorMsg on non-finished
-  // paths so the JATOS dashboard surfaces the exit reason.
   if (isUnderJatos()) {
     const csv = getCleanCsv(jsPsych);
-    const successful = codeKey === 'finished';
-    window.jatos.endStudy(csv, successful, successful ? null : codeKey);
-    jsPsych.abortExperiment(renderRedirectingPage('JATOS_END'));
+    const successful = reasonKey === 'finished';
+    window.jatos.endStudy(csv, successful, successful ? null : reasonKey);
+    // abortExperiment swaps the page body so any queued trials don't
+    // render while JATOS is doing its end-of-study handoff.
+    jsPsych.abortExperiment(renderJatosHandoffPage());
     return;
   }
 
-  let html;
-  if (!isUnderProlific(jsPsych)) {
-    html = renderLocalEndPage(jsPsych, codeKey, code);
-  } else if (!code) {
-    html = renderNoReturnPage();
-  } else {
-    html = renderRedirectingPage(code);
-    setTimeout(() => window.location.replace(buildCompletionUrl(code)), delayMs);
-  }
-  // abortExperiment halts the timeline AND replaces the page body with the
-  // HTML we pass in, so any trials that were queued behind us never render.
-  jsPsych.abortExperiment(html);
+  // Local dev: no JATOS, no Prolific. Just show the debug summary.
+  jsPsych.abortExperiment(renderLocalEndPage(jsPsych, reasonKey));
 }
 
 // --- internal: rendering helpers ----------------------------------------
@@ -130,31 +114,21 @@ function pageWrap(inner) {
                 max-width:640px;margin:0 auto;color:#222;">${inner}</div>`;
 }
 
-function renderRedirectingPage(code) {
-  const url = buildCompletionUrl(code);
+function renderJatosHandoffPage() {
   return pageWrap(`
     <h2>Thank you — saving your data...</h2>
-    <p>You will be redirected to Prolific in a moment.
-       If nothing happens, click <a href="${url}">here</a>.</p>
+    <p>You will be returned to Prolific in a moment.</p>
   `);
 }
 
-function renderNoReturnPage() {
-  return pageWrap(`
-    <h2>Thank you for your interest.</h2>
-    <p>Unfortunately your browser or device does not meet the technical
-    requirements for this study. Please return the study on Prolific to
-    avoid affecting your approval rate.</p>
-  `);
-}
-
-function renderLocalEndPage(jsPsych, codeKey, code) {
+function renderLocalEndPage(jsPsych, reasonKey) {
   const captured = _capturedParams ?? {};
   const nRows = jsPsych.data.get().count();
   return pageWrap(`
     <h2>Session finished (local dev mode).</h2>
-    <p>Outcome: <code>${codeKey}</code> &middot; would redirect with code
-       <code>${code ?? '(none — no return URL)'}</code>.</p>
+    <p>Outcome: <code>${reasonKey}</code>. No JATOS detected, so no
+       Prolific redirect was attempted — this page is the dev-only
+       stand-in for that handoff.</p>
     <p>Data rows recorded: <code>${nRows}</code>.</p>
     <p>
       <button onclick="window.aotExport()"

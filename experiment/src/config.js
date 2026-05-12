@@ -132,24 +132,25 @@ export const CATCH_TRIAL_BONUS = {
 // data.js falls back to localStorage so the experiment still runs in dev.
 export const DATAPIPE_EXPERIMENT_ID = 'XXXXXXXXXXXX';
 
-// -- Prolific completion codes -------------------------------------------
+// -- End-of-session reason keys ------------------------------------------
 //
-// **For JATOS deployments these are NOT used.** Under JATOS, the Prolific
-// completion code lives in JATOS's study configuration (not in this
-// bundle), and JATOS handles the redirect itself when we call
-// jatos.endStudy(). This keeps the codes off the client so a participant
-// can't extract one from the HTML/JS and claim completion without doing
-// the experiment.
+// Recognized values for the `reasonKey` argument to `endSession()`. The
+// bundle is JATOS-only for production: when running under JATOS, the
+// reason key is forwarded to `jatos.endStudy(csv, successful, errorMsg)`
+// — JATOS then handles the Prolific redirect using the completion code
+// configured in JATOS's study settings. The code never ships to the
+// client, so a participant can't extract it from the JS bundle.
 //
-// These placeholders are kept only for the **non-JATOS** code path
-// (direct Prolific deployment via GitHub Pages / Cloudflare Pages /
-// similar). Fill them in from the Prolific study dashboard if you ever
-// deploy without JATOS. The 'PLACEHOLDER_*' values are designed to
-// fail loudly on Prolific if shipped accidentally.
-export const COMPLETION_CODES = {
-  finished:              'PLACEHOLDER_FINISHED',
-  familiarizationFailed: 'PLACEHOLDER_FAMFAIL',
-  qualificationFailed:   'PLACEHOLDER_QUALFAIL',
-  consentDeclined:       'PLACEHOLDER_NOCONSENT',
-  browserRejected:       null,
-};
+// Locally (no JATOS), `endSession` just shows a debug page summarising
+// the captured data — there's no Prolific redirect path in this bundle
+// anymore.
+//
+// `finished` is the only "successful" reason; everything else is
+// reported as an errorMsg so JATOS surfaces it in the dashboard.
+export const END_REASONS = new Set([
+  'finished',
+  'familiarizationFailed',
+  'qualificationFailed',
+  'consentDeclined',
+  'browserRejected',
+]);
