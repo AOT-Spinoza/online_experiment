@@ -112,7 +112,7 @@ def load_session(
     p = Path(path)
     # JATOS exports per-session result data as `data.txt` even though the
     # content is CSV. Sniff by first byte rather than relying on the
-    # extension — '{' or '[' → JSON, anything else → assume CSV.
+    # extension — '{' or '[' → JSON, anything else → assume CSV/TSV.
     if p.suffix.lower() == '.json':
         df = _load_from_json_bundle(p, session_pid=session_pid)
     else:
@@ -121,9 +121,34 @@ def load_session(
         if first in ('{', '['):
             df = _load_from_json_bundle(p, session_pid=session_pid)
         else:
-            df = pd.read_csv(p)
+            df = _read_delimited(p)
             df.attrs['source_file'] = str(p)
     return merge_confidence_into_stimulus(df)
+
+
+def _read_delimited(p: Path) -> pd.DataFrame:
+    """Read a CSV-or-TSV file, auto-detecting the separator.
+
+    The bundle writes proper CSV (jsPsych's `.csv()`), but participants /
+    researchers sometimes open the .txt file in Excel and save it back —
+    Excel re-encodes with tab separators and CRLF endings, and (more
+    annoyingly) auto-formats large integers like `session_start_ms` into
+    scientific notation (`1.77859E+12`), losing precision. We sniff for
+    tabs first; if the header has none we fall back to comma. We also
+    coerce `session_start_ms` back to a regular int via float when it
+    arrives as scientific-notation text — precision is lost in the last
+    few digits but the session is still identifiable.
+    """
+    with p.open('rb') as f:
+        header = f.readline()
+    sep = '\t' if header.count(b'\t') > header.count(b',') else ','
+    df = pd.read_csv(p, sep=sep)
+    if 'session_start_ms' in df.columns:
+        # Will silently turn the scientific-notation float into an int.
+        # NaNs (rows where the field wasn't filled) stay as NaN.
+        s = pd.to_numeric(df['session_start_ms'], errors='coerce')
+        df['session_start_ms'] = s.astype('Int64')
+    return df
 
 
 def merge_confidence_into_stimulus(df: pd.DataFrame) -> pd.DataFrame:

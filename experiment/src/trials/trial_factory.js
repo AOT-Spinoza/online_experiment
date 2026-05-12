@@ -249,6 +249,14 @@ export function makeTrialFactories(jsPsych) {
     const { stimulus_id, url } = payload;
     const askConfidence = options.askConfidence !== false;  // default: yes
 
+    // Per-trial wall-clock measurement for play_completed. With
+    // `choices: 'NO_KEYS'` the video plugin never sets `data.rt` (no key
+    // can be pressed → rt stays null), so the earlier rt-based check
+    // was always false in production data. We instead time the trial
+    // ourselves: if wall time < trial_duration - epsilon, the `ended`
+    // event fired first (good); if it hits the trial_duration timeout
+    // (videoMs + 500), the video failed to reach the end (bad).
+    let _videoT0 = null;
     const videoPlay = {
       type: VideoKeyboardResponse,
       stimulus: [url],
@@ -265,10 +273,19 @@ export function makeTrialFactories(jsPsych) {
         stimulus_id,
         ...meta,
       },
+      on_start() {
+        _videoT0 = performance.now();
+      },
       on_finish(data) {
-        // play_completed: true iff the video actually ran (rt is set when
-        // ended fires before the safety timeout).
-        data.play_completed = data.rt != null && data.rt < TIMING.videoMs + 400;
+        const dur = _videoT0 != null ? performance.now() - _videoT0 : null;
+        // play_completed: true iff the video's `ended` event fired
+        // BEFORE the safety-timeout (trial_duration). The threshold
+        // sits 100 ms below trial_duration to absorb scheduling jitter
+        // — `ended` is dispatched on the renderer's vsync rather than
+        // precisely at videoMs.
+        data.play_completed = dur != null && dur < TIMING.videoMs + 400;
+        data.video_play_duration_ms = dur;
+        _videoT0 = null;
       },
     };
 
