@@ -166,7 +166,7 @@ pipeline/source_obvious/
   - `plugin-html-button-response` — block-end summary screens with Continue / Finish buttons (these are not time-critical; clicks are fine).
   - `plugin-fullscreen` — enter/exit fullscreen.
   - `plugin-browser-check` — block mobile/tablet, enforce minimum viewport.
-  - `plugin-survey-html-form` — demographics + debrief.
+  - `plugin-survey-html-form` — optional free-text debrief (no demographics; see §3.3 step 13).
   - `plugin-call-function` — sequenced async work around saving.
 - Contrib plugin: **`@jspsych-contrib/plugin-pipe`** — sends data to DataPipe for storage on OSF. No backend server needed.
 - Bundling: ship as plain ESM with a small build step (`esbuild`) producing one `experiment.bundle.js`. Avoids a heavy framework.
@@ -208,7 +208,7 @@ A typical session runs ~45 minutes. **4 main blocks** of 100 trials each, each t
 10. **Main blocks (4 × 100 trials)** — 95 real + 5 catch interleaved (§3.5). `response_allowed_while_playing: false`; direction RT measured from the response prompt's onset. **No ground truth on the client** for real or catch trials in main — see §3.9.
 11. **Block-end screen** — summary: trials completed, median RT, elapsed time, accrued bonus. **No accuracy shown for main blocks** (no client-side ground truth — see §3.7). Single **Continue** button (forward-only flow; the production version no longer offers a between-block early-exit). Loop terminates after the 4th block or on hitting the 1-hour runaway-session cap.
 12. **Mandatory rest** — between blocks 2 and 3, a forced ≥30 s break with a countdown.
-13. **Final survey** — age + gender (the two demographic questions promised in the consent), plus optional "anything unusual?" and free-text comment fields.
+13. **Final survey** — two optional free-text fields ("anything unusual?" + general comments). **No demographics collected.** Earlier drafts included age + gender; these were removed to keep the dataset free of any participant-typed personal information, which simplifies data-management and ethics handling. The Prolific PID is still attached to every row (needed for payment + per-participant joins), but no demographic data is asked for or stored.
 14. **Save data** via `jsPsychPipe` (§3.8). Must complete before redirect.
 15. **Redirect** to Prolific completion URL.
 

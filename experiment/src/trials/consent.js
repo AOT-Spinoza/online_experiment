@@ -20,12 +20,12 @@ const CONSENT_HTML = `
 
     <p>By agreeing to this informed consent form, you agree:</p>
     <ul>
-      <li>to answer two questions about your age and gender;</li>
       <li>to perform a simple task;</li>
-      <li>to complete a short questionnaire after finishing the experiment;</li>
+      <li>to optionally leave brief written feedback after the task;</li>
       <li>to complete these tasks individually and seriously, online from
           home, in a quiet place, using a laptop or PC.</li>
     </ul>
+    <p>No demographic information (such as age or gender) is collected.</p>
     <p>In return, you will receive monetary compensation after completing
        all tasks.</p>
 
