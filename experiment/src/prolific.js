@@ -31,11 +31,33 @@ import { getCleanCsv } from './data.js';
 const PROLIFIC_PARAMS = ['PROLIFIC_PID', 'STUDY_ID', 'SESSION_ID'];
 
 /** Read URL search params relevant to Prolific. Missing keys are absent
- *  in the returned object, not `null`. */
+ *  in the returned object, not `null`.
+ *
+ *  Under JATOS we MUST consult `jatos.urlQueryParameters` rather than
+ *  `window.location.search`. JATOS routes the original Prolific URL
+ *  (`/publix/<batch>?PROLIFIC_PID=…`) through its own publix layer and
+ *  serves the experiment HTML from a different URL that does NOT carry
+ *  the original query string. The PROLIFIC_PID is then only accessible
+ *  via `jatos.urlQueryParameters.PROLIFIC_PID`. Reading
+ *  `window.location.search` (which is what jsPsych.data.getURLVariable
+ *  does) returns nothing, the recordProlificParams fallback fires, and
+ *  every row gets stamped with a `LOCAL_<rand>` PID instead of the
+ *  participant's real Prolific ID — which is exactly what a student
+ *  reported on their first Prolific-launched JATOS pilot.
+ *
+ *  Outside JATOS (local dev, GitHub-Pages direct deploy, etc.) we still
+ *  fall through to jsPsych's URL reader. */
 export function readProlificParams(jsPsych) {
   const out = {};
+  const jatosParams = (
+    typeof window !== 'undefined'
+    && window.jatos
+    && window.jatos.urlQueryParameters
+  ) ? window.jatos.urlQueryParameters : null;
+
   for (const key of PROLIFIC_PARAMS) {
-    const v = jsPsych.data.getURLVariable(key);
+    let v = jatosParams ? jatosParams[key] : null;
+    if (!v) v = jsPsych.data.getURLVariable(key);
     if (v) out[key] = v;
   }
   return out;
@@ -54,12 +76,24 @@ let _capturedParams = null;
  *  Returns the params actually stored. */
 export function recordProlificParams(jsPsych) {
   const params = readProlificParams(jsPsych);
+  const realPid = Boolean(params.PROLIFIC_PID);
   if (!params.PROLIFIC_PID) {
     params.PROLIFIC_PID = `LOCAL_${jsPsych.randomization.randomID(8)}`;
   }
   params.session_start_ms = Date.now();
   jsPsych.data.addProperties(params);
   _capturedParams = params;
+  // Loud, unambiguous log so it's obvious in the dev console whether
+  // the real Prolific ID was captured or whether we silently fell back
+  // to a LOCAL_ random id. Researchers chasing missing bonus payments
+  // need this evidence to be visible.
+  // eslint-disable-next-line no-console
+  console.info(
+    `[prolific.js] PROLIFIC_PID = ${params.PROLIFIC_PID} ` +
+    `(${realPid ? 'real, from URL' : 'LOCAL fallback — no URL param found'})` +
+    `; STUDY_ID = ${params.STUDY_ID ?? '(none)'}` +
+    `; SESSION_ID = ${params.SESSION_ID ?? '(none)'}`,
+  );
   return params;
 }
 
