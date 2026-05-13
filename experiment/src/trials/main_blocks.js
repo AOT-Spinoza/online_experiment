@@ -26,7 +26,7 @@ import { KEYS, STRUCTURE } from '../config.js';
 import { phaseHasStimuli, buildMainBlocks } from '../stimuli.js';
 import { makeBlockEndScreen, makeMandatoryRestScreen } from './block_end.js';
 import { makeSaveTrial } from '../data.js';
-import { preloadConfig } from '../preload_config.js';
+import { preloadWithWarmup } from '../preload_config.js';
 
 function mainIntro() {
   // Rough wall-time estimate per block: 2.5 s video + ~3 s direction
@@ -83,7 +83,7 @@ export function makeMainBlocksTimeline(jsPsych, factories, stimuli, state, pid) 
       });
     }
 
-    const preload = preloadConfig({
+    const [preload, warmup] = preloadWithWarmup({
       videos: trialList.map(s => s.url),
       message: `<p>Loading block ${i + 1} clips…</p>`,
       phase: 'main',
@@ -107,7 +107,7 @@ export function makeMainBlocksTimeline(jsPsych, factories, stimuli, state, pid) 
     const blockEnd = makeBlockEndScreen(jsPsych, i, state, state._sessionStart);
 
     items.push({
-      timeline: [preload, ...trials, blockSave, blockEnd],
+      timeline: [preload, warmup, ...trials, blockSave, blockEnd],
       conditional_function: () => shouldContinueBlocks(state),
     });
   }

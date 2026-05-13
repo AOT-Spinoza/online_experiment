@@ -13,7 +13,7 @@ import CallFunction from '@jspsych/plugin-call-function';
 
 import { KEYS, STRUCTURE } from '../config.js';
 import { phaseHasStimuli, buildQualificationList } from '../stimuli.js';
-import { preloadConfig } from '../preload_config.js';
+import { preloadWithWarmup } from '../preload_config.js';
 
 const LAYER_NAME = 'layer_c';
 
@@ -44,7 +44,7 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
 
   const qualList = buildQualificationList(jsPsych, stimuli);
 
-  const preload = preloadConfig({
+  const [preload, warmup] = preloadWithWarmup({
     videos: qualList.map(s => s.url),
     message: '<p>Loading qualification clips…</p>',
     phase: 'qualification',
@@ -88,6 +88,6 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
 
   return {
     name: LAYER_NAME,
-    timeline: [qualificationIntro(), preload, ...trials, gate],
+    timeline: [qualificationIntro(), preload, warmup, ...trials, gate],
   };
 }

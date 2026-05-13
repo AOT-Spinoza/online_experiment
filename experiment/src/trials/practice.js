@@ -17,7 +17,7 @@ import HtmlKeyboardResponse from '@jspsych/plugin-html-keyboard-response';
 
 import { KEYS } from '../config.js';
 import { phaseHasStimuli, buildPracticeList } from '../stimuli.js';
-import { preloadConfig } from '../preload_config.js';
+import { preloadWithWarmup } from '../preload_config.js';
 
 const LAYER_NAME = 'layer_b';
 
@@ -71,7 +71,7 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
     ...practiceList.map(s => s.url),
     ...(catchSlot ? [catchSlot.url] : []),
   ];
-  const preload = preloadConfig({
+  const [preload, warmup] = preloadWithWarmup({
     videos: allUrls,
     message: '<p>Loading practice clips… this may take a few seconds.</p>',
     phase: 'practice',
@@ -110,6 +110,6 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
 
   return {
     name: LAYER_NAME,
-    timeline: [practiceIntro(), preload, ...trials],
+    timeline: [practiceIntro(), preload, warmup, ...trials],
   };
 }
