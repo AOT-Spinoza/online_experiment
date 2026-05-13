@@ -255,7 +255,20 @@ export function makeTrialFactories(jsPsych) {
     // was always false in production data. We instead time the trial
     // ourselves: if wall time < trial_duration - epsilon, the `ended`
     // event fired first (good); if it hits the trial_duration timeout
-    // (videoMs + 500), the video failed to reach the end (bad).
+    // the video failed to reach the end (bad).
+    //
+    // SAFETY TIMEOUT: bumped from videoMs + 500 (3 s) to videoMs + 3500
+    // (6 s) after a student reported block-2 trials showing no video
+    // at all. The likely cause is a preload-cache miss for one or
+    // more URLs (jsPsych's plugin-preload silently drops XHR responses
+    // with statuses other than {200, 0, 404}), in which case the video
+    // plugin falls back to a network <source src=...> fetch that
+    // doesn't finish in 500 ms. 6 s gives a normal home connection
+    // time to network-fetch + decode + emit `ended` for a 2.5 s, ~400
+    // KB MP4 even on a cold cache, while still catching genuinely
+    // unreachable URLs. preload_config.js logs a WARNING in the
+    // console when the cache miss occurs so we can diagnose.
+    const VIDEO_PLAY_MAX_MS = TIMING.videoMs + 3500;
     let _videoT0 = null;
     const videoPlay = {
       type: VideoKeyboardResponse,
@@ -263,10 +276,7 @@ export function makeTrialFactories(jsPsych) {
       choices: 'NO_KEYS',
       response_allowed_while_playing: false,
       trial_ends_after_video: true,
-      // Safety net in case the video's `ended` event doesn't fire (e.g.
-      // a corrupt file). Generous-ish so a normal 2.5-s clip never trips
-      // it before its own `ended` fires.
-      trial_duration: TIMING.videoMs + 500,
+      trial_duration: VIDEO_PLAY_MAX_MS,
       width: null,
       data: {
         trial_type_tag: 'video_play',
@@ -276,15 +286,40 @@ export function makeTrialFactories(jsPsych) {
       on_start() {
         _videoT0 = performance.now();
       },
+      on_load() {
+        // Diagnostic: if the URL isn't in the preload buffer, the video
+        // plugin will fall back to fetching it from the network mid-
+        // trial — which is the most likely cause of "block N showed no
+        // videos" reports. Surface this loudly so we can spot it in the
+        // browser console.
+        const buf = jsPsych.pluginAPI.getVideoBuffer(url);
+        if (!buf) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[video_play] CACHE MISS for ${url} — falling back to ` +
+            `network fetch. Check the [preload] WARNING above for the ` +
+            `block this URL belongs to.`,
+          );
+        }
+      },
       on_finish(data) {
         const dur = _videoT0 != null ? performance.now() - _videoT0 : null;
         // play_completed: true iff the video's `ended` event fired
         // BEFORE the safety-timeout (trial_duration). The threshold
-        // sits 100 ms below trial_duration to absorb scheduling jitter
+        // sits a bit below trial_duration to absorb scheduling jitter
         // — `ended` is dispatched on the renderer's vsync rather than
         // precisely at videoMs.
-        data.play_completed = dur != null && dur < TIMING.videoMs + 400;
+        data.play_completed = dur != null && dur < VIDEO_PLAY_MAX_MS - 200;
         data.video_play_duration_ms = dur;
+        if (data.play_completed === false) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[video_play] DID NOT COMPLETE for ${url} ` +
+            `(duration=${dur != null ? Math.round(dur) : 'null'} ms; ` +
+            `timeout=${VIDEO_PLAY_MAX_MS} ms). The participant likely ` +
+            `saw a blank video area before the response prompt.`,
+          );
+        }
         _videoT0 = null;
       },
     };

@@ -88,6 +88,7 @@ export function makeMainBlocksTimeline(jsPsych, factories, stimuli, state, pid) 
       message: `<p>Loading block ${i + 1} clips…</p>`,
       phase: 'main',
       blockIndex: i,
+      jsPsych,
     });
 
     const trials = trialList.map((s, j) => factories.videoTrial(

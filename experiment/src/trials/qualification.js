@@ -48,6 +48,7 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
     videos: qualList.map(s => s.url),
     message: '<p>Loading qualification clips…</p>',
     phase: 'qualification',
+    jsPsych,
   });
 
   const trials = qualList.map((s, i) => factories.videoTrial(

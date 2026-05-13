@@ -75,6 +75,7 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
     videos: allUrls,
     message: '<p>Loading practice clips… this may take a few seconds.</p>',
     phase: 'practice',
+    jsPsych,
   });
 
   const trials = practiceList.map((s, i) => factories.videoTrial(
