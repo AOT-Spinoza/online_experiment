@@ -132,7 +132,7 @@ export function endSession(jsPsych, reasonKey) {
     window.jatos.endStudy(csv, successful, successful ? null : reasonKey);
     // abortExperiment swaps the page body so any queued trials don't
     // render while JATOS is doing its end-of-study handoff.
-    jsPsych.abortExperiment(renderJatosHandoffPage());
+    jsPsych.abortExperiment(renderJatosHandoffPage(reasonKey));
     return;
   }
 
@@ -148,9 +148,30 @@ function pageWrap(inner) {
                 max-width:640px;margin:0 auto;color:#222;">${inner}</div>`;
 }
 
-function renderJatosHandoffPage() {
+function renderJatosHandoffPage(reasonKey = 'finished') {
+  if (reasonKey === 'finished') {
+    return pageWrap(`
+      <h2>Thank you — saving your data...</h2>
+      <p>You will be returned to Prolific in a moment.</p>
+    `);
+  }
+  if (reasonKey === 'preload_failed') {
+    return pageWrap(`
+      <h2>We couldn't load the next block of videos.</h2>
+      <p>This usually means a temporary network problem on our side or
+      yours. <strong>Your responses from previous blocks have been
+      saved</strong>, so you don't need to repeat any of them.</p>
+      <p>You will be returned to Prolific in a moment. If you'd like to
+      try the experiment again, please contact the researchers through
+      Prolific — they can credit you for the time you've already spent.</p>
+    `);
+  }
+  // Generic non-success handoff (consent declined, qualification fail,
+  // browser rejected, familiarization failed). JATOS handles the
+  // Prolific return either way; this message is just what the
+  // participant sees during the redirect.
   return pageWrap(`
-    <h2>Thank you — saving your data...</h2>
+    <h2>Thank you for your participation.</h2>
     <p>You will be returned to Prolific in a moment.</p>
   `);
 }

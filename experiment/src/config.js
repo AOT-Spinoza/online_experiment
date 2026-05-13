@@ -153,4 +153,9 @@ export const END_REASONS = new Set([
   'qualificationFailed',
   'consentDeclined',
   'browserRejected',
+  // Preload couldn't complete within the safety timeout, OR completed
+  // with one or more files failed. Previous-block data is still on the
+  // JATOS server (the per-block saveTrial ran before this block's
+  // preload started). See preload_config.preloadHealthCheck.
+  'preload_failed',
 ]);

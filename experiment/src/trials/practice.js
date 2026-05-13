@@ -71,7 +71,7 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
     ...practiceList.map(s => s.url),
     ...(catchSlot ? [catchSlot.url] : []),
   ];
-  const [preload, warmup] = preloadWithWarmup({
+  const [preload, healthCheck, warmup] = preloadWithWarmup({
     videos: allUrls,
     message: '<p>Loading practice clips… this may take a few seconds.</p>',
     phase: 'practice',
@@ -110,6 +110,6 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
 
   return {
     name: LAYER_NAME,
-    timeline: [practiceIntro(), preload, warmup, ...trials],
+    timeline: [practiceIntro(), preload, healthCheck, warmup, ...trials],
   };
 }

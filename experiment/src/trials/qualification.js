@@ -44,7 +44,7 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
 
   const qualList = buildQualificationList(jsPsych, stimuli);
 
-  const [preload, warmup] = preloadWithWarmup({
+  const [preload, healthCheck, warmup] = preloadWithWarmup({
     videos: qualList.map(s => s.url),
     message: '<p>Loading qualification clips…</p>',
     phase: 'qualification',
@@ -88,6 +88,6 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
 
   return {
     name: LAYER_NAME,
-    timeline: [qualificationIntro(), preload, warmup, ...trials, gate],
+    timeline: [qualificationIntro(), preload, healthCheck, warmup, ...trials, gate],
   };
 }

@@ -10,6 +10,16 @@
 import PreloadPlugin from '@jspsych/plugin-preload';
 import CallFunction from '@jspsych/plugin-call-function';
 
+import { endSession } from './prolific.js';
+
+// Hard upper bound on how long any one preload trial may wait for all
+// videos to load before giving up. 100 videos × ~400 KB = 40 MB; even
+// on a 3 Mbps connection that takes ~110 s. We pick 120 s as a generous
+// ceiling that catches genuinely hung connections (the original "wait
+// forever" default trapped a participant for 30 min on a stuck XHR)
+// without false-positive-ing a normal slow-but-working load.
+const PRELOAD_MAX_LOAD_MS = 120 * 1000;
+
 const ERROR_MESSAGE = `
   <div style="text-align:left; max-width:540px; margin:0 auto; line-height:1.5;">
     <h2>Couldn't load the videos.</h2>
@@ -34,7 +44,15 @@ export function preloadConfig({ videos, message, phase, blockIndex = null, jsPsy
     auto_preload: false,
     message: message ?? '<p>Loading videos…</p>',
     error_message: ERROR_MESSAGE,
-    continue_after_error: false,
+    // On failure (timeout or per-file error), let the trial advance so
+    // the post-preload health-check below can route to a graceful
+    // endSession() call rather than trapping the participant on a
+    // dead-end "couldn't load" screen forever. continue_after_error +
+    // health-check is much safer than continue_after_error: false,
+    // which jsPsych's plugin-preload handles by replacing the page
+    // body with `error_message` and leaving the timeline parked.
+    continue_after_error: true,
+    max_load_time: PRELOAD_MAX_LOAD_MS,
     on_success: (url) => {
       _loadedCount += 1;
     },
@@ -229,14 +247,57 @@ export function warmupVideosTrial(
   };
 }
 
-/** Convenience: build [preload, warmup] pair for a block. Drop both into
- *  the timeline in order — preload populates the XHR-blob cache, warmup
- *  primes the decoder for every URL in `videos`. */
+/** Post-preload health check. Reads the most recent preload row from
+ *  the jsPsych data store; if it reports `success: false` (timeout or
+ *  per-file error), end the session via JATOS rather than letting the
+ *  participant march into a block whose videos won't play.
+ *
+ *  Why this is on the timeline rather than inside the preload trial:
+ *  jsPsych's plugin-preload doesn't expose a "ran-out-of-time, what
+ *  next?" callback that gives us the jsPsych instance — we'd have to
+ *  fork the plugin. A simple sentinel trial after preload is much
+ *  cleaner and keeps the dependency direction clean.
+ *
+ *  We pass `'preload_failed'` as the endSession reason. Per-block data
+ *  saved by `blockSave` trials in earlier blocks is already on the
+ *  JATOS server; endSession's `jatos.endStudy(csv, false, …)` call
+ *  flushes a final cumulative CSV (including the failing preload row)
+ *  so the participant's progress isn't lost. */
+function preloadHealthCheck(jsPsych, tag) {
+  return {
+    type: CallFunction,
+    func: () => {
+      const last = jsPsych.data
+        .get()
+        .filter({ trial_type_tag: 'preload' })
+        .last(1)
+        .values()[0];
+      if (!last) return;
+      // success is bool|null in plugin-preload; we treat anything other
+      // than strictly true as a failure for participant-safety.
+      if (last.success === true) return;
+      const nFailed = Array.isArray(last.failed_video) ? last.failed_video.length : 'unknown';
+      // eslint-disable-next-line no-console
+      console.error(
+        `[preload_health] FAILED (${tag}): success=${last.success}, ` +
+        `timeout=${last.timeout}, failed_videos=${nFailed}. ` +
+        `Ending the session gracefully — previous blocks are already saved on the server.`,
+      );
+      endSession(jsPsych, 'preload_failed');
+    },
+    data: { trial_type_tag: 'preload_health_check' },
+  };
+}
+
+/** Convenience: build [preload, healthCheck, warmup] for a block. Drop
+ *  all three into the timeline in order — preload populates the XHR-blob
+ *  cache, healthCheck routes a failed preload to a graceful endSession,
+ *  warmup primes the decoder for every URL in `videos`. */
 export function preloadWithWarmup(opts) {
+  const tag = `phase=${opts.phase}` +
+    (opts.blockIndex != null ? `, block=${opts.blockIndex}` : '');
   const preload = preloadConfig(opts);
-  const warmup = warmupVideosTrial(opts.jsPsych ?? null, opts.videos, {
-    tag: `phase=${opts.phase}` +
-      (opts.blockIndex != null ? `, block=${opts.blockIndex}` : ''),
-  });
-  return [preload, warmup];
+  const healthCheck = preloadHealthCheck(opts.jsPsych, tag);
+  const warmup = warmupVideosTrial(opts.jsPsych ?? null, opts.videos, { tag });
+  return [preload, healthCheck, warmup];
 }

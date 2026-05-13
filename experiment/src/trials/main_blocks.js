@@ -83,7 +83,7 @@ export function makeMainBlocksTimeline(jsPsych, factories, stimuli, state, pid) 
       });
     }
 
-    const [preload, warmup] = preloadWithWarmup({
+    const [preload, healthCheck, warmup] = preloadWithWarmup({
       videos: trialList.map(s => s.url),
       message: `<p>Loading block ${i + 1} clips…</p>`,
       phase: 'main',
@@ -107,7 +107,7 @@ export function makeMainBlocksTimeline(jsPsych, factories, stimuli, state, pid) 
     const blockEnd = makeBlockEndScreen(jsPsych, i, state, state._sessionStart);
 
     items.push({
-      timeline: [preload, warmup, ...trials, blockSave, blockEnd],
+      timeline: [preload, healthCheck, warmup, ...trials, blockSave, blockEnd],
       conditional_function: () => shouldContinueBlocks(state),
     });
   }
