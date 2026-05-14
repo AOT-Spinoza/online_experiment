@@ -71,6 +71,59 @@ def _clean_subjects(ps: pd.DataFrame) -> list[dict]:
     return out
 
 
+def _per_block_accuracy(responses: pd.DataFrame) -> dict[str, list[float | None]]:
+    """For each pid_hash, return [acc_b0, acc_b1, acc_b2, acc_b3] on
+    main-task real (non-catch) trials. Used by the dashboard's
+    "accuracy drift across blocks" chart to detect fatigue / learning.
+    A subject who didn't reach a block contributes None for that block,
+    so chartjs spanGaps treats their line as ending early.
+    """
+    if 'pid_hash' not in responses.columns:
+        return {}
+    m = responses[
+        (responses['trial_type_tag'] == 'stimulus')
+        & (responses['phase'] == 'main')
+        & (responses['pm_type'] == 'main')
+    ].copy()
+    if not len(m) or 'main_correct' not in m.columns:
+        return {}
+    m['main_correct'] = m['main_correct'].astype('boolean')
+    out: dict[str, list[float | None]] = {}
+    for pid_hash, sub in m.groupby('pid_hash'):
+        per_block: list[float | None] = []
+        for b in range(4):
+            blk = sub[sub['block_index'] == b]
+            if not len(blk):
+                per_block.append(None)
+                continue
+            v = blk['main_correct'].dropna()
+            per_block.append(float(v.astype('Int64').astype(int).mean()) if len(v) else None)
+        out[str(pid_hash)] = per_block
+    return out
+
+
+def _source_asymmetry(per_source: pd.DataFrame) -> list[dict]:
+    """Convert per_source.tsv into JSON records for the asymmetry scatter.
+    Only sources with both forward AND backward viewings are included
+    (else the asymmetry isn't defined)."""
+    out = []
+    for _, r in per_source.iterrows():
+        fw = r.get('identifiability_score_fw')
+        bw = r.get('identifiability_score_bw')
+        if pd.isna(fw) or pd.isna(bw):
+            continue
+        out.append({
+            'source_id': str(r['source_id']),
+            'id_fw': float(fw),
+            'id_bw': float(bw),
+            'asymmetry': float(r.get('asymmetry') or 0.0),
+            'n_views_fw': int(r.get('n_views_fw') or 0),
+            'n_views_bw': int(r.get('n_views_bw') or 0),
+            'preferred_direction': str(r.get('preferred_direction') or 'tied'),
+        })
+    return out
+
+
 def _video_aggregates(pv: pd.DataFrame, corpus_target_cells: int = 4400) -> dict:
     """Pre-compute corpus-level stats so we don't ship 4k rows of per-video
     data to the browser when only a handful of histograms are needed."""
@@ -121,12 +174,18 @@ def _video_aggregates(pv: pd.DataFrame, corpus_target_cells: int = 4400) -> dict
 def build_dashboard(
     per_subject_path: str | Path | None = None,
     per_video_path: str | Path | None = None,
+    per_source_path: str | Path | None = None,
+    responses_path: str | Path | None = None,
     out_path: str | Path | None = None,
 ) -> Path:
     if per_subject_path is None:
         per_subject_path = DEFAULT_DERIVED_DIR / 'per_subject.tsv'
     if per_video_path is None:
         per_video_path = DEFAULT_DERIVED_DIR / 'per_video.tsv'
+    if per_source_path is None:
+        per_source_path = DEFAULT_DERIVED_DIR / 'per_source.tsv'
+    if responses_path is None:
+        responses_path = DEFAULT_DERIVED_DIR / 'responses.parquet'
     if out_path is None:
         out_path = DEFAULT_DERIVED_DIR / 'dashboard.html'
     out_path = Path(out_path)
@@ -135,10 +194,25 @@ def build_dashboard(
     ps = pd.read_csv(per_subject_path, sep='\t')
     pv = pd.read_csv(per_video_path, sep='\t')
 
+    subjects = _clean_subjects(ps)
+    # Compute per-block accuracy from the parquet and attach to each subject
+    # record so the drift chart can plot lines directly without ever touching
+    # the raw 60k-row store in JS.
+    block_acc: dict[str, list[float | None]] = {}
+    if Path(responses_path).exists():
+        responses = pd.read_parquet(responses_path)
+        block_acc = _per_block_accuracy(responses)
+    for s in subjects:
+        s['block_acc'] = block_acc.get(s['pid_hash'], [None, None, None, None])
+
+    per_source = pd.read_csv(per_source_path, sep='\t') if Path(per_source_path).exists() else pd.DataFrame()
+    per_source_records = _source_asymmetry(per_source) if len(per_source) else []
+
     payload = {
         'generated_at': datetime.now(timezone.utc).isoformat(),
-        'subjects': _clean_subjects(ps),
+        'subjects': subjects,
         'per_video': _video_aggregates(pv),
+        'per_source': per_source_records,
     }
 
     html = _HTML_TEMPLATE.replace(
@@ -385,13 +459,26 @@ tbody tr.highlight { background: #fff3c4 !important; }
 <section class="chart-row">
     <div class="chart-card">
         <h3>Calibration: accuracy by reported confidence</h3>
-        <div class="desc">Each grey line = one subject. Bold = cohort mean. Click a row in the table below to highlight that subject.</div>
+        <div class="desc">Each faint line = one subject. Bold = cohort mean. Click a row in the table below to highlight that subject.</div>
         <div class="canvas-wrap"><canvas id="ch-calib"></canvas></div>
     </div>
     <div class="chart-card">
+        <h3>Accuracy drift across main blocks</h3>
+        <div class="desc">Direction accuracy at each block (0–3) on real main trials. Flat = no fatigue. Bold = cohort mean. Click a table row to highlight.</div>
+        <div class="canvas-wrap"><canvas id="ch-drift"></canvas></div>
+    </div>
+</section>
+
+<section class="chart-row">
+    <div class="chart-card">
         <h3>Per-video identifiability score</h3>
-        <div class="desc">Confidence-weighted bettor score per (stimulus × direction). Bins of width 0.1.</div>
+        <div class="desc">Confidence-weighted bettor score per (stimulus × direction). Bins of width 0.1; green = correctly identified, red = systematically misidentified.</div>
         <div class="canvas-wrap"><canvas id="ch-id"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h3>Per-source asymmetry: forward vs backward identifiability</h3>
+        <div class="desc">One point per source video. On-diagonal = same difficulty in both directions; off-diagonal = asymmetric (one direction much easier). Hover for source_id + scores.</div>
+        <div class="canvas-wrap"><canvas id="ch-asymmetry"></canvas></div>
     </div>
 </section>
 
@@ -765,6 +852,138 @@ function chartCalibration() {
     });
 }
 
+function chartDrift() {
+    destroy('drift');
+    const subs = activeSubjects();
+    const labels = ['Block 1', 'Block 2', 'Block 3', 'Block 4'];
+
+    const means = [0,1,2,3].map(i =>
+        mean(subs.map(s => s.block_acc ? s.block_acc[i] : null))
+    );
+
+    const datasets = subs.map(s => ({
+        label: s.pid_hash,
+        data: s.block_acc || [null, null, null, null],
+        borderColor: s.pid_hash === highlightPid ? COLORS.highlight :
+                     (s.included ? COLORS.included + '66' : COLORS.excluded + '66'),
+        backgroundColor: 'transparent',
+        borderWidth: s.pid_hash === highlightPid ? 3 : 1,
+        tension: 0.2,
+        pointRadius: s.pid_hash === highlightPid ? 4 : 1.5,
+        spanGaps: true,
+    }));
+    datasets.push({
+        label: 'cohort mean',
+        data: means,
+        borderColor: '#111',
+        backgroundColor: 'transparent',
+        borderWidth: 3,
+        tension: 0.2,
+        pointRadius: 5,
+        pointBackgroundColor: '#111',
+    });
+
+    charts.drift = new Chart(document.getElementById('ch-drift'), {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: items => items[0].label,
+                        label: c => {
+                            const v = c.parsed.y;
+                            return c.dataset.label === 'cohort mean'
+                                ? `cohort mean: ${v?.toFixed?.(2) ?? '—'}`
+                                : `${c.dataset.label}: ${v?.toFixed?.(2) ?? '—'}`;
+                        },
+                    },
+                },
+            },
+            scales: {
+                y: { min: 0.4, max: 1.0, title: { display: true, text: 'direction accuracy' }, ticks: { stepSize: 0.1 } },
+                x: { title: { display: true, text: 'block' } },
+            },
+        },
+    });
+}
+
+function chartAsymmetry() {
+    destroy('asymmetry');
+    const rows = PAYLOAD.per_source || [];
+    // Color by absolute asymmetry: large = orange, small = blue. Size by total views.
+    const points = rows.map(r => ({
+        x: r.id_fw,
+        y: r.id_bw,
+        _row: r,
+    }));
+    const colors = rows.map(r => {
+        const a = Math.abs(r.asymmetry);
+        if (a >= 1.0) return COLORS.accent2 + 'CC';   // very asymmetric
+        if (a >= 0.5) return '#e6a542CC';            // moderately
+        return COLORS.accent + '55';                  // near-diagonal
+    });
+    const sizes = rows.map(r => {
+        const n = (r.n_views_fw || 0) + (r.n_views_bw || 0);
+        return Math.min(8, 2 + n);
+    });
+
+    charts.asymmetry = new Chart(document.getElementById('ch-asymmetry'), {
+        type: 'scatter',
+        data: {
+            datasets: [
+                {
+                    label: 'symmetric (y = x)',
+                    type: 'line',
+                    data: [{x: -1, y: -1}, {x: 1, y: 1}],
+                    borderColor: '#888',
+                    borderDash: [4,4],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: false,
+                    showLine: true,
+                },
+                {
+                    label: 'source',
+                    data: points,
+                    backgroundColor: colors,
+                    borderColor: '#333',
+                    borderWidth: 0.3,
+                    pointRadius: sizes,
+                    pointHoverRadius: ctx => sizes[ctx.dataIndex] + 2,
+                },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: () => '',
+                        label: c => {
+                            if (c.datasetIndex === 0) return '';
+                            const r = points[c.dataIndex]?._row;
+                            if (!r) return '';
+                            return [
+                                `source ${r.source_id}`,
+                                `fw = ${r.id_fw.toFixed(2)} (n=${r.n_views_fw}) · bw = ${r.id_bw.toFixed(2)} (n=${r.n_views_bw})`,
+                                `asymmetry = ${(r.asymmetry >= 0 ? '+' : '') + r.asymmetry.toFixed(2)}  → ${r.preferred_direction}`,
+                            ];
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: { min: -1.05, max: 1.05, title: { display: true, text: 'forward identifiability' }, grid: { color: '#eee' } },
+                y: { min: -1.05, max: 1.05, title: { display: true, text: 'backward identifiability' }, grid: { color: '#eee' } },
+            },
+        },
+    });
+}
+
 function chartIdScore() {
     destroy('id');
     const hist = PAYLOAD.per_video.id_score_hist;
@@ -883,6 +1102,7 @@ function renderTable() {
         highlightPid = (highlightPid === pid) ? null : pid;
         renderTable();
         chartCalibration();
+        chartDrift();
     }));
 }
 
@@ -896,7 +1116,9 @@ function renderAll() {
     chartCatch();
     chartForward();
     chartCalibration();
+    chartDrift();
     chartIdScore();
+    chartAsymmetry();
     chartCoverage();
     chartDuration();
     renderTable();
