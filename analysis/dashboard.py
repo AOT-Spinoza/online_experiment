@@ -54,6 +54,14 @@ def _clean_subjects(ps: pd.DataFrame) -> list[dict]:
     Adds a `calib_curve` list (accuracy at conf 1..5) and `calib_n` list so
     the calibration chart can plot per-subject curves directly without
     re-running the calibration logic in JS.
+
+    Type-coercion gotcha: a previous version forgot to include Python
+    native `int` / `float` in the isinstance() guards, only catching
+    `np.integer` / `np.floating`. Pandas iterrows yields native Python
+    ints for int64 Series, so e.g. `n_main_real=380` fell through to
+    the `else` branch and got stringified — JS then string-concatenated
+    them in the KPI sum, producing a multi-thousand-digit number
+    overflowing the page. Both branches now include the native types.
     """
     out = []
     for _, r in ps.iterrows():
@@ -62,8 +70,9 @@ def _clean_subjects(ps: pd.DataFrame) -> list[dict]:
             if pd.isna(val):
                 rec[col] = None
             elif isinstance(val, (np.bool_, bool)):
+                # bool BEFORE int (bool is a subclass of int in Python).
                 rec[col] = bool(val)
-            elif isinstance(val, (np.integer,)):
+            elif isinstance(val, (int, np.integer)):
                 rec[col] = int(val)
             elif isinstance(val, (np.floating, float)):
                 f = float(val)
@@ -178,11 +187,55 @@ def _video_aggregates(pv: pd.DataFrame, corpus_target_cells: int = 4400) -> dict
         for i in range(len(raw_counts))
     ]
 
+    # Identifiability score histogram split by ground-truth direction.
+    # Reveals whether reversed clips are systematically more confusing
+    # than forward clips (the Hanyu-et-al. signature, but at the per-
+    # clip level rather than per-subject).
+    by_dir_hist: dict[str, list[dict]] = {}
+    for direction in ('forward', 'backward'):
+        sub = pv.loc[pv['pm_direction'] == direction, 'identifiability_score'].dropna()
+        c, _ = np.histogram(sub, bins=bin_edges)
+        by_dir_hist[direction] = [
+            {'bin_lo': float(bin_edges[i]),
+             'bin_hi': float(bin_edges[i + 1]),
+             'bin_center': float((bin_edges[i] + bin_edges[i + 1]) / 2),
+             'count': int(c[i])}
+            for i in range(len(c))
+        ]
+
+    # Per-cell records for the confidence-vs-accuracy scatter and the
+    # top-N most-confusing table. Restricted to n_views >= 2 to drop
+    # single-view noise; further filtering (n_views >= 3 for the table)
+    # is done in the browser so the same array serves both views.
+    cell_cols = ['stimulus_id', 'pm_direction', 'n_views',
+                 'identifiability_score', 'direction_accuracy_raw',
+                 'mean_confidence', 'mean_confidence_correct',
+                 'mean_confidence_wrong']
+    cells: list[dict] = []
+    pv_multi = pv[pv['n_views'] >= 2]
+    for col in cell_cols:
+        if col not in pv_multi.columns:
+            pv_multi = pv_multi.copy()
+            pv_multi[col] = None
+    for _, r in pv_multi.iterrows():
+        cells.append({
+            'stimulus_id': str(r['stimulus_id']),
+            'pm_direction': str(r['pm_direction']) if pd.notna(r.get('pm_direction')) else None,
+            'n_views': int(r['n_views']) if pd.notna(r['n_views']) else 0,
+            'identifiability_score': float(r['identifiability_score']) if pd.notna(r.get('identifiability_score')) else None,
+            'direction_accuracy_raw': float(r['direction_accuracy_raw']) if pd.notna(r.get('direction_accuracy_raw')) else None,
+            'mean_confidence': float(r['mean_confidence']) if pd.notna(r.get('mean_confidence')) else None,
+            'mean_conf_correct': float(r['mean_confidence_correct']) if pd.notna(r.get('mean_confidence_correct')) else None,
+            'mean_conf_wrong': float(r['mean_confidence_wrong']) if pd.notna(r.get('mean_confidence_wrong')) else None,
+        })
+
     return {
         'n_views_hist': n_views_hist,
         'coverage_at_n': coverage_at_n,
         'id_score_hist': id_hist,
+        'id_score_hist_by_direction': by_dir_hist,
         'raw_acc_hist': raw_hist,
+        'cells': cells,
         'total_cells_observed': int(len(pv)),
         'total_cells_corpus': corpus_target_cells,
         'mean_n_views': float(n_views.mean()) if len(n_views) else 0.0,
@@ -368,6 +421,18 @@ header.bar select option { background: var(--header); color: white; }
 }
 .chart-card canvas { max-height: 260px; }
 
+/* Square canvas for scatter plots whose axes share a scale (e.g.
+   forward vs backward identifiability). Pinning the wrap to a fixed
+   square box plus maintainAspectRatio:false on the chart lets Chart.js
+   fill the box exactly without distorting the 1:1 axis ratio. */
+.chart-card .canvas-wrap.canvas-square {
+    width: 360px;
+    height: 360px;
+    max-width: 100%;
+    margin: 0 auto;
+}
+.chart-card .canvas-wrap.canvas-square canvas { max-height: 360px; }
+
 .table-card {
     background: var(--card);
     border-radius: var(--radius);
@@ -504,9 +569,31 @@ tbody tr.highlight { background: #fff3c4 !important; }
     </div>
     <div class="chart-card">
         <h3>Per-source asymmetry: forward vs backward identifiability</h3>
-        <div class="desc">One point per source video. On-diagonal = same difficulty in both directions; off-diagonal = asymmetric (one direction much easier). Hover for source_id + scores.</div>
-        <div class="canvas-wrap"><canvas id="ch-asymmetry"></canvas></div>
+        <div class="desc">One point per source video; axes are both identifiability score, plotted at 1:1. On-diagonal = same difficulty in both directions; off-diagonal = asymmetric (one direction much easier). Hover for source_id + scores.</div>
+        <div class="canvas-wrap canvas-square"><canvas id="ch-asymmetry"></canvas></div>
     </div>
+</section>
+
+<section class="chart-row">
+    <div class="chart-card">
+        <h3>Identifiability score by ground-truth direction</h3>
+        <div class="desc">Same identifiability bins as above, but split by whether the clip was actually forward or backward. Hanyu-et-al. signature would put the backward distribution shifted left (lower / more negative scores) — reversed clips harder to identify than forward.</div>
+        <div class="canvas-wrap"><canvas id="ch-id-by-dir"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h3>Confidence vs accuracy per clip — the "fooler" view</h3>
+        <div class="desc">One point per (clip × direction) with ≥ 2 views. x = mean confidence on the clip, y = direction accuracy. <strong>Bottom-right quadrant = confident-but-wrong = the most interesting clips</strong> (high confidence, low accuracy = visually suggests the opposite direction). Top-right = easy. Top-left = honest hard. Bottom-left = genuinely ambiguous.</div>
+        <div class="canvas-wrap canvas-square"><canvas id="ch-confacc"></canvas></div>
+    </div>
+</section>
+
+<section class="table-card">
+    <h3>Most confusing clips (n_views ≥ 3)</h3>
+    <div class="hint">Sorted by identifiability score ascending — most negative first. These are clips where the population systematically picks the WRONG direction with confidence. Worth eyeballing the source video for any consistent visual cue that's misleading observers.</div>
+    <table id="confusing-table">
+        <thead><tr id="confusing-thead"></tr></thead>
+        <tbody id="confusing-tbody"></tbody>
+    </table>
 </section>
 
 <section class="chart-row">
@@ -1064,6 +1151,159 @@ function chartAsymmetry() {
     });
 }
 
+function chartIdByDirection() {
+    destroy('idDir');
+    const byDir = PAYLOAD.per_video.id_score_hist_by_direction || {};
+    const fw = byDir.forward || [];
+    const bw = byDir.backward || [];
+    if (!fw.length || !bw.length) return;
+    const labels = fw.map(h => h.bin_center.toFixed(2));
+    charts.idDir = new Chart(document.getElementById('ch-id-by-dir'), {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: 'forward',
+                    data: fw.map(h => h.count),
+                    backgroundColor: COLORS.accent + 'BB',
+                    borderColor: COLORS.accent,
+                    borderWidth: 1,
+                    borderRadius: 2,
+                },
+                {
+                    label: 'backward',
+                    data: bw.map(h => h.count),
+                    backgroundColor: COLORS.accent2 + 'BB',
+                    borderColor: COLORS.accent2,
+                    borderWidth: 1,
+                    borderRadius: 2,
+                },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true, position: 'top', labels: { font: { size: 11 } } },
+                tooltip: {
+                    callbacks: {
+                        title: items => {
+                            const i = items[0].dataIndex;
+                            return `${fw[i].bin_lo.toFixed(2)} – ${fw[i].bin_hi.toFixed(2)}`;
+                        },
+                        label: c => `${c.dataset.label}: ${c.parsed.y} cells`,
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 11 },
+                    title: { display: true, text: 'identifiability score (bin center)', font: { size: 11 } },
+                },
+                y: { beginAtZero: true, title: { display: true, text: 'cells' } },
+            },
+        },
+    });
+}
+
+function chartConfAcc() {
+    destroy('confacc');
+    const cells = (PAYLOAD.per_video.cells || []).filter(
+        c => c.mean_confidence != null && c.direction_accuracy_raw != null
+    );
+    const points = cells.map(c => ({
+        x: c.mean_confidence,
+        y: c.direction_accuracy_raw,
+        _row: c,
+    }));
+    // Color by direction; size by sqrt(n_views) so high-n cells stand out.
+    const colors = cells.map(c =>
+        c.pm_direction === 'forward' ? COLORS.accent + 'BB' : COLORS.accent2 + 'BB',
+    );
+    const sizes = cells.map(c => Math.min(8, 2 + Math.log2(Math.max(2, c.n_views))));
+
+    charts.confacc = new Chart(document.getElementById('ch-confacc'), {
+        type: 'scatter',
+        data: {
+            datasets: [
+                // Chance reference line at y = 0.5
+                {
+                    label: 'chance',
+                    type: 'line',
+                    data: [{ x: 1, y: 0.5 }, { x: 5, y: 0.5 }],
+                    borderColor: '#888',
+                    borderDash: [4, 4],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: false,
+                    showLine: true,
+                },
+                {
+                    label: 'cell',
+                    data: points,
+                    backgroundColor: colors,
+                    borderColor: '#333',
+                    borderWidth: 0.3,
+                    pointRadius: sizes,
+                    pointHoverRadius: ctx => sizes[ctx.dataIndex] + 2,
+                },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: () => '',
+                        label: c => {
+                            if (c.datasetIndex === 0) return '';
+                            const r = points[c.dataIndex]?._row;
+                            if (!r) return '';
+                            return [
+                                `stim ${r.stimulus_id.slice(0, 12)}…  (${r.pm_direction})`,
+                                `acc = ${r.direction_accuracy_raw.toFixed(2)}  ·  mean conf = ${r.mean_confidence.toFixed(2)}  ·  n=${r.n_views}`,
+                            ];
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: { min: 1, max: 5, title: { display: true, text: 'mean confidence on clip' }, grid: { color: '#eee' } },
+                y: { min: 0, max: 1, title: { display: true, text: 'direction accuracy' }, grid: { color: '#eee' } },
+            },
+        },
+    });
+}
+
+function renderConfusingTable(minViews = 3, topN = 15) {
+    const cells = (PAYLOAD.per_video.cells || [])
+        .filter(c => c.n_views >= minViews && c.identifiability_score != null)
+        .sort((a, b) => a.identifiability_score - b.identifiability_score)
+        .slice(0, topN);
+
+    const cols = [
+        { key: 'stimulus_id', label: 'stim id', fmt: 'str' },
+        { key: 'pm_direction', label: 'direction', fmt: 'str' },
+        { key: 'n_views', label: 'n views', fmt: 'int' },
+        { key: 'identifiability_score', label: 'id score', fmt: 'fbias' },
+        { key: 'direction_accuracy_raw', label: 'accuracy', fmt: 'f2' },
+        { key: 'mean_confidence', label: 'mean conf', fmt: 'f2' },
+        { key: 'mean_conf_wrong', label: 'mean conf when wrong', fmt: 'f2' },
+    ];
+    document.getElementById('confusing-thead').innerHTML =
+        cols.map(c => `<th>${c.label}</th>`).join('');
+    document.getElementById('confusing-tbody').innerHTML = cells.map(row => {
+        return '<tr>' + cols.map(c => {
+            const v = row[c.key];
+            const right = ['int', 'f2', 'f3', 'fbias'].includes(c.fmt) ? 'right' : '';
+            const mono = c.key === 'stimulus_id' ? 'mono' : '';
+            return `<td class="${right} ${mono}">${fmt(v, c.fmt)}</td>`;
+        }).join('') + '</tr>';
+    }).join('');
+}
+
 function chartIdScore() {
     destroy('id');
     const hist = PAYLOAD.per_video.id_score_hist;
@@ -1199,6 +1439,9 @@ function renderAll() {
     chartDrift();
     chartIdScore();
     chartAsymmetry();
+    chartIdByDirection();
+    chartConfAcc();
+    renderConfusingTable();
     chartCoverage();
     chartDuration();
     renderTable();

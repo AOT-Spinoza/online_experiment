@@ -68,9 +68,12 @@ RE_OBVIOUS = re.compile(r"^(.+)_(fw|rv)\.mp4$")  # any-stem, _fw or _rv suffix
 # exclusion so the audit trail stays visible.
 EXCLUDED_SOURCES: set[str] = {
     # 2026-05-14 — researcher flagged this clip as visually ambiguous
-    # in the forward direction during the first Prolific cohort; an
-    # extra catch trial in Layer B fills the slot (see CLAUDE.md §3.4).
+    # during the first Prolific cohort. BOTH directions excluded (a
+    # source that's hard to read in one direction is almost always
+    # hard in the other too; replace both with catch demos in Layer B
+    # via STRUCTURE.practiceCatchTrials = 2).
     "practice/13924703_fw.mp4",
+    "practice/13924703_rv.mp4",
 }
 
 

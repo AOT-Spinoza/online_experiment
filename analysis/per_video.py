@@ -148,6 +148,10 @@ def build_per_video_table(
         acc_raw = float(c.mean())
         n_views = len(c)
 
+        # Mean confidence regardless of correctness (used for the
+        # confidence-vs-accuracy scatter — "are people CONFIDENTLY wrong
+        # on this clip?").
+        mean_conf_all = float(conf.mean()) if len(conf) else float('nan')
         # Stratified means
         if c.sum() > 0:
             mean_conf_correct = float(conf[c == 1].mean())
@@ -181,6 +185,7 @@ def build_per_video_table(
             'direction_accuracy_weighted_ci_lo': acc_lo,
             'direction_accuracy_weighted_ci_hi': acc_hi,
             'direction_accuracy_raw': acc_raw,
+            'mean_confidence': mean_conf_all,
             'mean_confidence_correct': mean_conf_correct,
             'mean_confidence_wrong': mean_conf_wrong,
             'confidence_dispersion': conf_disp,
