@@ -202,8 +202,8 @@ A typical session runs ~45 minutes. **4 main blocks** of 100 trials each, each t
 4. **Browser/device check** — desktop only, modern Chromium/Firefox/Safari, viewport ≥ 1024×600. Polite reject otherwise with no completion code (so they can return the study). **TODO**: plugin pulled in via package.json; not yet wired into the timeline.
 5. **Layer A intro + Layer A familiarization (~8 trials, §3.4)** — synthetic HTML instruction stimuli covering direction key, confidence key, and combined responses. No real-clip ground truth involved.
 6. **Task intro** — full task explanation including direction + confidence keys, the catch-trial format, and the catch-trial bonus disclosure (per the consent commitment).
-7. **Layer B — Practice (~12 trials, with feedback, §3.4)** — real obvious clips from `pipeline/source_obvious/`, ground truth shipped, per-trial "Correct" / "Not quite" feedback. **These clips are processed via `process_obvious.py` (§2.8) and live in a separate pool from the main corpus — they never appear in main blocks.** Plus 1 catch-trial demo so participants see the catch format once before main.
-8. **Layer C — Qualification (~10 trials, gate, §3.4)** — disjoint obvious clips, no per-trial feedback, ≥ 75% correct on direction to proceed. Failure ends gracefully with a Prolific completion code that pays for time spent (excluded from analysis, **not "rejected" on Prolific**).
+7. **Layer B — Practice (~12 trials, with feedback, §3.4)** — real obvious clips from `pipeline/source_obvious/`, ground truth shipped, per-trial "Correct" / "Not quite" feedback. **These clips are processed via `process_obvious.py` (§2.8) and live in a separate pool from the main corpus — they never appear in main blocks.** Plus **2 catch-trial demos** so participants encounter the catch format twice before main; spread at thirds of the layer so they're never back-to-back.
+8. **Layer C — Qualification (~10 trials, gate, §3.4)** — disjoint obvious clips + **1 catch trial** (so the format also lives in the gated phase), no per-trial feedback, ≥ 75% correct on direction (catch row excluded from the gate calculation) to proceed. Failure ends gracefully with a Prolific completion code that pays for time spent (excluded from analysis, **not "rejected" on Prolific**).
 9. **Main intro** — explicit "the experiment starts now / your responses count" message.
 10. **Main blocks (4 × 100 trials)** — 95 real + 5 catch interleaved (§3.5). `response_allowed_while_playing: false`; direction RT measured from the response prompt's onset. **No ground truth on the client** for real or catch trials in main — see §3.9.
 11. **Block-end screen** — summary: trials completed, median RT, elapsed time, accrued bonus. **No accuracy shown for main blocks** (no client-side ground truth — see §3.7). Single **Continue** button (forward-only flow; the production version no longer offers a between-block early-exit). Loop terminates after the 4th block or on hitting the 1-hour runaway-session cap.
@@ -232,16 +232,17 @@ Three pre-task gates, ordered from interface-only to task-only. Each layer is le
 
 **Layer B: Task practice (~12 trials, with feedback)**
 - Real obvious clips from `pipeline/source_obvious/`, processed via `process_obvious.py` (§2.8). These are externally-sourced clips — they are **not** in the main corpus.
-- **Plus 1 catch trial** (instruction video) so participants see the catch-trial format once before main blocks (§2.7). The catch demo plays from `stimuli.catch` and shows no feedback (the public manifest doesn't carry catch direction/expected_confidence).
+- **Plus 2 catch trials** (instruction videos) so participants encounter the catch-trial format twice before main blocks (§2.7). `STRUCTURE.practiceCatchTrials = 2` controls the count. The catches play from `stimuli.catch` and show no feedback (the public manifest doesn't carry catch direction/expected_confidence). Inserted at spread positions so they're never back-to-back.
 - Each trial includes the full direction + confidence response.
-- Ground truth **is** shipped for these specific clips because per-trial direction feedback requires it. Feedback shows direction correctness only ("Correct" / "Not quite") — we deliberately don't comment on the confidence rating.
+- Ground truth **is** shipped for the obvious clips because per-trial direction feedback requires it. Feedback shows direction correctness only ("Correct" / "Not quite") — we deliberately don't comment on the confidence rating.
 - Practice clips never appear in main blocks because they aren't in the main pool to begin with.
 
 **Layer C: Qualification (~10 trials, gate)**
-- Real obvious clips from the same `pipeline/source_obvious/` pool, **disjoint from practice** (split decided by `originals/practice/` + `originals/qualification/` subdirs, or by alphabetical halves if flat). No catch trials in this layer — Layer C's signal is "can the participant do the real task on obvious clips?" and we keep that signal clean.
+- Real obvious clips from the same `pipeline/source_obvious/` pool, **disjoint from practice** (split decided by `originals/practice/` + `originals/qualification/` subdirs, or by alphabetical halves if flat).
+- **Plus 1 catch trial** (`STRUCTURE.qualificationCatchTrials = 1`) so the catch format also lives in the gated phase — participants who breeze through Layer B's catches still see one more before the main blocks "count for real." The catch row is **tagged `is_qualification_catch: true` and excluded from the gate's accuracy fraction** (its expected response is offline-scored against the private manifest, not on the client, so including it would always be treated as wrong).
 - Each trial includes the full direction + confidence response.
-- Ground truth shipped (needed for the gate decision).
-- Gate is on **direction accuracy only**: ≥ 75% correct to proceed (default; revisit after pilot). Confidence is recorded but not gated.
+- Ground truth shipped (needed for the gate decision); no per-trial feedback shown.
+- Gate is on **direction accuracy on obvious clips only**: ≥ 75% correct to proceed (default; revisit after pilot). Confidence is recorded but not gated.
 - Failure: graceful exit with completion code paying for time spent.
 
 **Obvious-clip set: practical requirements**
@@ -448,7 +449,7 @@ Resolved so far:
 - ✅ Response modality: keyboard. Direction: **← = backward**, **→ = forward**. Confidence: number keys **1–5**.
 - ✅ Confidence scale labels: *guess · somewhat unsure · unsure · somewhat sure · certain*.
 - ✅ Familiarization format: HTML text trials via `plugin-html-keyboard-response` (Layer A in §3.4), now ~8 trials covering direction + confidence + combined.
-- ✅ Catch trials: 10 unique videos (2 directions × 5 confidence levels), one variant each. White text on dark grey, 480p, 2.5 s. 1 catch trial in Layer B practice; 5 per main block; none in Layer C.
+- ✅ Catch trials: 10 unique videos (2 directions × 5 confidence levels), one variant each. White text on dark grey, 480p, 2.5 s. **2** catch trials in Layer B practice; **1** in Layer C qualification (excluded from the gate fraction); 5 per main block.
 - ✅ Catch-trial inclusion threshold: ≥ 80% pass to be included in analysis.
 - ✅ Catch-trial bonus: payment bonus contingent on ≥ 80% catch-trial pass rate, **communicated to participants upfront** in instructions/consent. Paid manually after offline scoring.
 - ✅ Counterbalancing target *N* = **20 participants per clip per direction** for the full deployment (4,400 unique clip-direction combinations × 20 = 88,000 viewings ÷ ~380 real trials/participant ≈ **~232 participants minimum**; budget ~260–280 to absorb dropouts/exclusions).

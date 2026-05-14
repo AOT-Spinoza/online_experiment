@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,14 @@ import numpy as np
 import pandas as pd
 
 from .load_all import DEFAULT_DERIVED_DIR
+
+# Drift chart parameters. The cohort target is 4 × 95 = 380 real main
+# trials; subjects who didn't reach the full count are NaN-padded so all
+# curves share the same x-axis in the dashboard.
+DRIFT_TRIALS_PER_BLOCK = 95   # real (non-catch) trials per main block
+DRIFT_N_BLOCKS = 4
+DRIFT_N_MAX = DRIFT_TRIALS_PER_BLOCK * DRIFT_N_BLOCKS  # 380
+DRIFT_WINDOW = 25             # rolling mean width, centred
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +80,21 @@ def _clean_subjects(ps: pd.DataFrame) -> list[dict]:
     return out
 
 
-def _per_block_accuracy(responses: pd.DataFrame) -> dict[str, list[float | None]]:
-    """For each pid_hash, return [acc_b0, acc_b1, acc_b2, acc_b3] on
-    main-task real (non-catch) trials. Used by the dashboard's
-    "accuracy drift across blocks" chart to detect fatigue / learning.
-    A subject who didn't reach a block contributes None for that block,
-    so chartjs spanGaps treats their line as ending early.
+def _per_trial_drift_curve(
+    responses: pd.DataFrame,
+    window: int = DRIFT_WINDOW,
+    n_max: int = DRIFT_N_MAX,
+) -> dict[str, list]:
+    """Per-subject rolling-mean direction accuracy across real main trials.
+
+    Trials are ordered (block_index, trial_index_in_block), the centered
+    rolling window is applied across that sequence (skipping the catch
+    rows because pm_type='main' excludes them upstream), and the result
+    is padded with None to a common length of `n_max` so all subject
+    curves can share a single x-axis in the dashboard.
+
+    Used by the drift chart to spot fatigue (down-slope), warm-up
+    (up-slope), or a sudden anomaly inside one block.
     """
     if 'pid_hash' not in responses.columns:
         return {}
@@ -88,17 +106,18 @@ def _per_block_accuracy(responses: pd.DataFrame) -> dict[str, list[float | None]
     if not len(m) or 'main_correct' not in m.columns:
         return {}
     m['main_correct'] = m['main_correct'].astype('boolean')
-    out: dict[str, list[float | None]] = {}
+    out: dict[str, list] = {}
     for pid_hash, sub in m.groupby('pid_hash'):
-        per_block: list[float | None] = []
-        for b in range(4):
-            blk = sub[sub['block_index'] == b]
-            if not len(blk):
-                per_block.append(None)
-                continue
-            v = blk['main_correct'].dropna()
-            per_block.append(float(v.astype('Int64').astype(int).mean()) if len(v) else None)
-        out[str(pid_hash)] = per_block
+        ordered = sub.sort_values(['block_index', 'trial_index_in_block']).reset_index(drop=True)
+        acc = ordered['main_correct'].astype('Int64').astype('float64')
+        rolling = acc.rolling(
+            window=window, min_periods=max(5, window // 2), center=True,
+        ).mean().tolist()
+        padded = rolling[:n_max] + [None] * max(0, n_max - len(rolling))
+        out[str(pid_hash)] = [
+            None if (v is None or (isinstance(v, float) and math.isnan(v))) else float(v)
+            for v in padded
+        ]
     return out
 
 
@@ -195,15 +214,18 @@ def build_dashboard(
     pv = pd.read_csv(per_video_path, sep='\t')
 
     subjects = _clean_subjects(ps)
-    # Compute per-block accuracy from the parquet and attach to each subject
-    # record so the drift chart can plot lines directly without ever touching
-    # the raw 60k-row store in JS.
-    block_acc: dict[str, list[float | None]] = {}
+    # Compute per-trial rolling drift from the parquet and attach a
+    # curve (one value per ordered real main trial) to each subject so
+    # the drift chart can plot lines directly without ever touching the
+    # raw 60k-row store in JS.
+    trial_drift: dict[str, list] = {}
     if Path(responses_path).exists():
         responses = pd.read_parquet(responses_path)
-        block_acc = _per_block_accuracy(responses)
+        trial_drift = _per_trial_drift_curve(responses)
     for s in subjects:
-        s['block_acc'] = block_acc.get(s['pid_hash'], [None, None, None, None])
+        s['trial_drift'] = trial_drift.get(
+            s['pid_hash'], [None] * DRIFT_N_MAX,
+        )
 
     per_source = pd.read_csv(per_source_path, sep='\t') if Path(per_source_path).exists() else pd.DataFrame()
     per_source_records = _source_asymmetry(per_source) if len(per_source) else []
@@ -213,6 +235,11 @@ def build_dashboard(
         'subjects': subjects,
         'per_video': _video_aggregates(pv),
         'per_source': per_source_records,
+        'drift': {
+            'n_max': DRIFT_N_MAX,
+            'window': DRIFT_WINDOW,
+            'block_boundaries': [DRIFT_TRIALS_PER_BLOCK * i for i in range(1, DRIFT_N_BLOCKS)],
+        },
     }
 
     html = _HTML_TEMPLATE.replace(
@@ -463,8 +490,8 @@ tbody tr.highlight { background: #fff3c4 !important; }
         <div class="canvas-wrap"><canvas id="ch-calib"></canvas></div>
     </div>
     <div class="chart-card">
-        <h3>Accuracy drift across main blocks</h3>
-        <div class="desc">Direction accuracy at each block (0–3) on real main trials. Flat = no fatigue. Bold = cohort mean. Click a table row to highlight.</div>
+        <h3>Accuracy drift across main trials (rolling)</h3>
+        <div class="desc">25-trial centred rolling-mean direction accuracy across real main trials, ordered by (block, trial). Dashed verticals = block boundaries. Flat = no drift; rising = warm-up; falling = fatigue.</div>
         <div class="canvas-wrap"><canvas id="ch-drift"></canvas></div>
     </div>
 </section>
@@ -852,59 +879,112 @@ function chartCalibration() {
     });
 }
 
+// Per-chart plugin that paints dashed verticals at block boundaries on
+// the drift chart. Cleaner than the chartjs-plugin-annotation dependency.
+const blockBoundaryPlugin = {
+    id: 'blockBoundary',
+    afterDraw: (chart, args, opts) => {
+        const xs = opts?.boundaries;
+        if (!Array.isArray(xs) || xs.length === 0) return;
+        const ctx = chart.ctx;
+        const xScale = chart.scales.x;
+        const yScale = chart.scales.y;
+        ctx.save();
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+        ctx.fillStyle = '#666';
+        ctx.textAlign = 'center';
+        xs.forEach((b, i) => {
+            const px = xScale.getPixelForValue(b - 1);  // labels are 1-indexed
+            ctx.beginPath();
+            ctx.moveTo(px, yScale.top);
+            ctx.lineTo(px, yScale.bottom);
+            ctx.stroke();
+            ctx.fillText(`B${i + 1}|B${i + 2}`, px, yScale.top - 2);
+        });
+        ctx.restore();
+    },
+};
+
 function chartDrift() {
     destroy('drift');
     const subs = activeSubjects();
-    const labels = ['Block 1', 'Block 2', 'Block 3', 'Block 4'];
+    const N_MAX = (PAYLOAD.drift && PAYLOAD.drift.n_max) || 380;
+    const boundaries = (PAYLOAD.drift && PAYLOAD.drift.block_boundaries) || [95, 190, 285];
+    const labels = Array.from({ length: N_MAX }, (_, i) => i + 1);
 
-    const means = [0,1,2,3].map(i =>
-        mean(subs.map(s => s.block_acc ? s.block_acc[i] : null))
-    );
+    // Cohort mean at each trial position, averaged over subjects with
+    // a non-null rolling value at that index.
+    const means = [];
+    for (let i = 0; i < N_MAX; i++) {
+        const vals = subs
+            .map(s => (s.trial_drift && s.trial_drift[i] != null) ? s.trial_drift[i] : null)
+            .filter(v => v != null && !isNaN(v));
+        means.push(vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
+    }
 
     const datasets = subs.map(s => ({
         label: s.pid_hash,
-        data: s.block_acc || [null, null, null, null],
+        data: s.trial_drift || new Array(N_MAX).fill(null),
         borderColor: s.pid_hash === highlightPid ? COLORS.highlight :
-                     (s.included ? COLORS.included + '66' : COLORS.excluded + '66'),
+                     (s.included ? COLORS.included + '44' : COLORS.excluded + '44'),
         backgroundColor: 'transparent',
-        borderWidth: s.pid_hash === highlightPid ? 3 : 1,
-        tension: 0.2,
-        pointRadius: s.pid_hash === highlightPid ? 4 : 1.5,
+        borderWidth: s.pid_hash === highlightPid ? 2.5 : 0.8,
+        tension: 0.15,
+        pointRadius: 0,
+        pointHoverRadius: 0,
         spanGaps: true,
+        order: s.pid_hash === highlightPid ? 0 : 2,
     }));
     datasets.push({
         label: 'cohort mean',
         data: means,
         borderColor: '#111',
         backgroundColor: 'transparent',
-        borderWidth: 3,
-        tension: 0.2,
-        pointRadius: 5,
-        pointBackgroundColor: '#111',
+        borderWidth: 2.5,
+        tension: 0.15,
+        pointRadius: 0,
+        spanGaps: true,
+        order: 1,
     });
 
     charts.drift = new Chart(document.getElementById('ch-drift'), {
         type: 'line',
         data: { labels, datasets },
+        plugins: [blockBoundaryPlugin],
         options: {
             responsive: true, maintainAspectRatio: false,
+            animation: false,            // 30+ lines × 380 points → skip animation
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
             plugins: {
                 legend: { display: false },
                 tooltip: {
                     callbacks: {
-                        title: items => items[0].label,
+                        title: items => `trial ${items[0].label}`,
                         label: c => {
                             const v = c.parsed.y;
+                            if (v == null || isNaN(v)) return null;
                             return c.dataset.label === 'cohort mean'
-                                ? `cohort mean: ${v?.toFixed?.(2) ?? '—'}`
-                                : `${c.dataset.label}: ${v?.toFixed?.(2) ?? '—'}`;
+                                ? `cohort mean: ${v.toFixed(2)}`
+                                : `${c.dataset.label}: ${v.toFixed(2)}`;
                         },
                     },
                 },
+                blockBoundary: { boundaries: boundaries },
             },
             scales: {
-                y: { min: 0.4, max: 1.0, title: { display: true, text: 'direction accuracy' }, ticks: { stepSize: 0.1 } },
-                x: { title: { display: true, text: 'block' } },
+                y: {
+                    min: 0.3, max: 1.0,
+                    title: { display: true, text: `rolling accuracy (window=${(PAYLOAD.drift && PAYLOAD.drift.window) || 25})` },
+                    ticks: { stepSize: 0.1 },
+                },
+                x: {
+                    title: { display: true, text: 'main trial index (real only, ordered)' },
+                    ticks: { maxTicksLimit: 10, autoSkip: true, font: { size: 10 } },
+                    grid: { display: false },
+                },
             },
         },
     });

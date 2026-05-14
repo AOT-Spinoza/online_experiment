@@ -15,7 +15,7 @@
 
 import HtmlKeyboardResponse from '@jspsych/plugin-html-keyboard-response';
 
-import { KEYS } from '../config.js';
+import { KEYS, STRUCTURE } from '../config.js';
 import { phaseHasStimuli, buildPracticeList } from '../stimuli.js';
 import { preloadWithWarmup } from '../preload_config.js';
 
@@ -52,24 +52,27 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
 
   const practiceList = buildPracticeList(jsPsych, stimuli);
 
-  // Pull one real catch trial from the public manifest's `catch` array
-  // so the participant sees the catch-trial format once in practice.
-  // No feedback on this slot — the catch entry's expected response
-  // doesn't ship to the client (we score offline against the private
-  // manifest). The participant just sees the on-screen instruction,
-  // follows it, and proceeds. They've already done many real practice
-  // trials with feedback by this point so they understand the response
-  // shape; the demo just exposes them to the catch format itself.
-  let catchSlot = null;
-  if (phaseHasStimuli(stimuli, 'catch', 1)) {
+  // Pull STRUCTURE.practiceCatchTrials catches from the public manifest's
+  // `catch` array so the participant rehearses the catch-trial format
+  // before the main blocks count for real. No feedback on these slots —
+  // the catch entry's expected response doesn't ship to the client (we
+  // score offline against the private manifest). They've already done
+  // many real practice trials with feedback by the time the catches
+  // splice in, so the response shape is familiar; the demos just expose
+  // them to the on-screen-instruction format itself.
+  const nCatch = STRUCTURE.practiceCatchTrials || 0;
+  let catchSlots = [];
+  if (nCatch > 0 && phaseHasStimuli(stimuli, 'catch', 1)) {
     const pool = jsPsych.randomization.shuffle(stimuli.catch.slice());
-    catchSlot = pool[0];
+    for (let i = 0; i < nCatch; i++) {
+      catchSlots.push(pool[i % pool.length]);
+    }
   }
 
   // Preload everything we'll need this layer.
   const allUrls = [
     ...practiceList.map(s => s.url),
-    ...(catchSlot ? [catchSlot.url] : []),
+    ...catchSlots.map(s => s.url),
   ];
   const [preload, healthCheck, warmup] = preloadWithWarmup({
     videos: allUrls,
@@ -89,24 +92,27 @@ export function makePracticeTimeline(jsPsych, factories, stimuli) {
     { askConfidence: true, feedback: true },
   ));
 
-  // Insert the catch-trial demo at a random middle position so it's not
-  // the very first or last trial.
-  if (catchSlot) {
+  // Insert the catch demos at spread-out middle positions so they're
+  // never the very first/last trials and never back-to-back. With
+  // ~11 real practice trials, spacing them at thirds of the list is
+  // a simple and predictable layout.
+  catchSlots.forEach((catchSlot, i) => {
     const catchTrial = factories.videoTrial(
       { stimulus_id: catchSlot.stimulus_id, url: catchSlot.url },
       {
         phase: 'practice',
         block_index: 0,
-        trial_index_in_block: -1,   // marked separately for analysis
+        trial_index_in_block: -(i + 1),   // marked separately for analysis
         is_practice_catch_demo: true,
         // No direction_true: we don't have it for main entries, and
         // we don't want to score correctness on this slot.
       },
       { askConfidence: true, feedback: false },
     );
-    const insertAt = 4 + Math.floor((trials.length - 4) * 0.5);
+    const denom = catchSlots.length + 1;
+    const insertAt = Math.max(2, Math.floor(trials.length * (i + 1) / denom));
     trials.splice(insertAt, 0, catchTrial);
-  }
+  });
 
   return {
     name: LAYER_NAME,

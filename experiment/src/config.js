@@ -81,8 +81,9 @@ const FULL_STRUCTURE = {
   maxSessionMs: 90 * 60 * 1000,
   // Pre-experiment screening (CLAUDE.md §3.4).
   practiceTrials: 12,
-  practiceCatchTrials: 1,            // 1 catch trial in Layer B for exposure
+  practiceCatchTrials: 2,            // 2 catch trials in Layer B so the format is well-rehearsed
   qualificationTrials: 10,
+  qualificationCatchTrials: 1,       // 1 catch in Layer C so the format also lives in the gated phase
   qualificationPassFraction: 0.75,
   familiarizationTrials: 8,          // mixed: 2 direction, 2 confidence, 4 combined
   familiarizationMaxConsecutiveErrors: 2,

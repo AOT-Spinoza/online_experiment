@@ -123,9 +123,12 @@ export function buildPracticeList(jsPsych, stimuli) {
   return jsPsych.randomization.shuffle(realPractice);
 }
 
-/** Build the qualification list. Just shuffle and take N. */
+/** Build the qualification list. Just shuffle and take N obvious clips.
+ *  The catch trial(s) — if any — are spliced in by `qualification.js` at
+ *  middle positions so they're well-spread inside the layer. */
 export function buildQualificationList(jsPsych, stimuli) {
-  return sampleN(jsPsych, stimuli.qualification, STRUCTURE.qualificationTrials);
+  const nObvious = STRUCTURE.qualificationTrials - (STRUCTURE.qualificationCatchTrials || 0);
+  return sampleN(jsPsych, stimuli.qualification, nObvious);
 }
 
 /** Build the per-block main lists for the entire session.

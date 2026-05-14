@@ -61,6 +61,18 @@ RE_REAL_MAIN = re.compile(r"^(\d+)_(fw|rv)\.mp4$")
 RE_CATCH = re.compile(r"^catch_(fwd|rv)_([1-5])\.mp4$")
 RE_OBVIOUS = re.compile(r"^(.+)_(fw|rv)\.mp4$")  # any-stem, _fw or _rv suffix
 
+# Source files to drop from both manifests. Match against the
+# `source_file` value in the private manifest (i.e., the original_path
+# from hash_map.tsv). The corresponding public-manifest entries are
+# removed too (matched by stimulus_id). Add a one-line reason for each
+# exclusion so the audit trail stays visible.
+EXCLUDED_SOURCES: set[str] = {
+    # 2026-05-14 — researcher flagged this clip as visually ambiguous
+    # in the forward direction during the first Prolific cohort; an
+    # extra catch trial in Layer B fills the slot (see CLAUDE.md §3.4).
+    "practice/13924703_fw.mp4",
+}
+
 
 def parse_metadata(rel_path_str: str) -> dict:
     """Parse one entry's original_path → metadata dict.
@@ -458,6 +470,34 @@ def main() -> int:
             n_qualification=args.bootstrap_qualification,
             seed=args.bootstrap_seed,
         )
+
+    # Apply EXCLUDED_SOURCES (researcher-flagged sources to drop). Runs
+    # AFTER source_obvious resolution so it cleanly removes whatever
+    # phase the entry ended up in. The corresponding public-manifest
+    # entries are matched by stimulus_id and removed in tandem.
+    if EXCLUDED_SOURCES:
+        drop_sids = {
+            e["stimulus_id"] for e in private
+            if e.get("source_file") in EXCLUDED_SOURCES
+        }
+        if drop_sids:
+            private[:] = [e for e in private if e["stimulus_id"] not in drop_sids]
+            for arr in public.values():
+                arr[:] = [e for e in arr if e["stimulus_id"] not in drop_sids]
+            matched = sorted({
+                s for s in EXCLUDED_SOURCES
+                # Every excluded source must have been in the manifest;
+                # if a name is in EXCLUDED_SOURCES but not in the TSV
+                # it's almost always a typo and worth flagging loudly.
+                if any(s == ds for ds in EXCLUDED_SOURCES)
+            })
+            print(f"  EXCLUDED_SOURCES dropped {len(drop_sids)} entries: {sorted(EXCLUDED_SOURCES)}")
+        else:
+            print(
+                f"  WARNING: EXCLUDED_SOURCES is non-empty but no entries matched "
+                f"{sorted(EXCLUDED_SOURCES)} — check that source_file values use the "
+                f"same relative-path form as hash_map.tsv's original_path column."
+            )
 
     # Stable order for clean diffs.
     for arr in public.values():

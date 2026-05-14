@@ -70,10 +70,15 @@ export function taskIntro() {
       <h3 style="margin-top:32px;">Attention checks &amp; bonus</h3>
       <p>A small fraction of trials will not be real videos but on-screen
       <strong>instructions</strong> (e.g. "Press FORWARD, then press 3").
-      When you see one, follow it exactly. If you respond correctly to at
-      least <strong>${Math.round(CATCH_TRIAL_BONUS.passFraction * 100)}%</strong>
-      of these checks, you'll receive an additional bonus of
-      <strong>${CATCH_TRIAL_BONUS.amountText}</strong>.</p>
+      This is a simple but important attention check &mdash; please
+      <strong>follow the instructions exactly</strong>. There are only a few
+      of these checks. If you respond correctly to at least
+      <strong>${Math.round(CATCH_TRIAL_BONUS.passFraction * 100)}%</strong>
+      of them, you will receive an additional bonus of
+      <strong>${CATCH_TRIAL_BONUS.amountText}</strong>;
+      <strong>otherwise we may have to exclude your data</strong>.</p>
+      <p>You will see one of these checks during the practice and the
+      qualification rounds below, so you know what to expect.</p>
 
       <p style="margin-top:28px;">Press <span class="key-cap">SPACE</span> to continue.</p>
     `,

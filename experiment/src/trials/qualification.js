@@ -15,6 +15,13 @@ import { KEYS, STRUCTURE } from '../config.js';
 import { phaseHasStimuli, buildQualificationList } from '../stimuli.js';
 import { preloadWithWarmup } from '../preload_config.js';
 
+// Tag used on the catch row in Layer C so the gate calculation can
+// exclude it from the direction-accuracy fraction. The catch's
+// "correctness" is scored offline against the private manifest, not
+// on the client, so including it in the live gate would just dilute
+// the signal (we'd treat it as wrong by default).
+const QUAL_CATCH_FLAG = 'is_qualification_catch';
+
 const LAYER_NAME = 'layer_c';
 
 function qualificationIntro() {
@@ -44,8 +51,27 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
 
   const qualList = buildQualificationList(jsPsych, stimuli);
 
+  // Pull STRUCTURE.qualificationCatchTrials catches so the participant
+  // also encounters the catch-trial format in the gated phase. We tag
+  // them with QUAL_CATCH_FLAG so the gate's accuracy calculation can
+  // exclude them (the catch's expected response is offline-scored
+  // against the private manifest, not on the client).
+  const nCatch = STRUCTURE.qualificationCatchTrials || 0;
+  let catchSlots = [];
+  if (nCatch > 0 && phaseHasStimuli(stimuli, 'catch', 1)) {
+    const pool = jsPsych.randomization.shuffle(stimuli.catch.slice());
+    for (let i = 0; i < nCatch; i++) {
+      catchSlots.push(pool[i % pool.length]);
+    }
+  }
+
+  const allUrls = [
+    ...qualList.map(s => s.url),
+    ...catchSlots.map(s => s.url),
+  ];
+
   const [preload, healthCheck, warmup] = preloadWithWarmup({
-    videos: qualList.map(s => s.url),
+    videos: allUrls,
     message: '<p>Loading qualification clips…</p>',
     phase: 'qualification',
     jsPsych,
@@ -62,8 +88,28 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
     { askConfidence: true, feedback: false },
   ));
 
-  // Final gate-check trial: compute direction accuracy on this layer and
-  // set state.qualificationFailed if below threshold. The fail-gate that
+  // Splice catches into middle positions; spread evenly when nCatch > 1.
+  catchSlots.forEach((catchSlot, i) => {
+    const catchTrial = factories.videoTrial(
+      { stimulus_id: catchSlot.stimulus_id, url: catchSlot.url },
+      {
+        phase: 'qualification',
+        block_index: 0,
+        trial_index_in_block: -(i + 1),  // marked separately for analysis
+        [QUAL_CATCH_FLAG]: true,
+        // No direction_true: catch ground truth doesn't ship to the
+        // client. The gate excludes this row via QUAL_CATCH_FLAG below.
+      },
+      { askConfidence: true, feedback: false },
+    );
+    const denom = catchSlots.length + 1;
+    const insertAt = Math.max(2, Math.floor(trials.length * (i + 1) / denom));
+    trials.splice(insertAt, 0, catchTrial);
+  });
+
+  // Final gate-check trial: compute direction accuracy on this layer
+  // (EXCLUDING catch rows — see QUAL_CATCH_FLAG above) and set
+  // state.qualificationFailed if below threshold. The fail-gate that
   // follows in main.js routes to endSession when the flag is set.
   const gate = {
     type: CallFunction,
@@ -71,15 +117,16 @@ export function makeQualificationTimeline(jsPsych, factories, stimuli, state) {
       const rows = jsPsych.data
         .get()
         .filter({ trial_type_tag: 'stimulus', phase: 'qualification' })
-        .values();
+        .values()
+        .filter(r => !r[QUAL_CATCH_FLAG]);
       const total = rows.length;
       const correct = rows.filter(r => r.correct === true).length;
       const fraction = total > 0 ? correct / total : 0;
       // eslint-disable-next-line no-console
       console.info(
-        `[qualification.js] direction accuracy = ${correct}/${total} = ` +
-        `${(fraction * 100).toFixed(1)}% (threshold ` +
-        `${(STRUCTURE.qualificationPassFraction * 100).toFixed(0)}%)`,
+        `[qualification.js] direction accuracy on obvious clips = ` +
+        `${correct}/${total} = ${(fraction * 100).toFixed(1)}% ` +
+        `(threshold ${(STRUCTURE.qualificationPassFraction * 100).toFixed(0)}%)`,
       );
       state.qualificationFailed = fraction < STRUCTURE.qualificationPassFraction;
     },
