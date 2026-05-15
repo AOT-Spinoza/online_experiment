@@ -343,11 +343,11 @@ const save_data = {
 4. **Cross-origin video host** (§2.5/§3.2) — videos and experiment HTML are on different origins; naive scrape-by-URL approaches don't even get the videos without CORS-respecting requests.
 5. **Familiarization is leak-free** — instruction text is in the visible stimulus itself; the client doesn't need a separate label.
 6. **Practice/qualification leak is bounded** — only ~22–40 obvious clips ever ship with labels, and they never appear in main blocks. A bot that scrapes those labels gains nothing on the 4,400 main stimuli.
-7. **Catch trials interspersed in main blocks** (§2.7). The public manifest exposes a separate `catch` array (so the runtime can deliberately mix 95 real + 5 catch per block). A bot scraping the bundle therefore knows which 10 stimuli are catches — but it still has to **decode each catch video to read the on-screen instruction** in order to comply (direction + confidence are different per catch). The 4358 real-clip stimuli stay unidentifiable. Catch-trial pass rate is gated for inclusion (≥ 80%) and rewarded with a payment bonus communicated to participants upfront in the consent + instructions screens.
+7. **Catch trials interspersed in main blocks** (§2.7). The public manifest exposes a separate `catch` array (so the runtime can deliberately mix 95 real + 5 catch per block). A bot scraping the bundle therefore knows which 10 stimuli are catches — but it still has to **decode each catch video to read the on-screen instruction** in order to comply (direction + confidence are different per catch). The 4358 real-clip stimuli stay unidentifiable. Catch-trial performance feeds two **separate** decisions (see "Behavioral filtering" below): the **catch-direction** pass rate gates analysis inclusion, while the stricter **catch-full** pass rate (direction AND confidence) governs the payment bonus communicated to participants upfront.
 
 **Behavioral filtering (offline)**
 1. Failed familiarization or qualification → exclude.
-2. Catch-trial pass rate < 80% → exclude (and no attention bonus).
+2. **Catch-direction pass rate < 80% → exclude.** The attention gate is the catch *direction* pass rate, not catch full-pass. The catch's confidence instruction ("…then press 3") conflicts with the response mapping participants are trained on for 400 trials (number key = their *own* confidence); an engaged-but-hasty participant reads the direction correctly but rates confidence normally instead of obeying the override. Gating on direction cleanly separates genuine autopilot (can't fake 16/20 on a 50/50 direction split) from this confidence-key slip. The **bonus** is a separate decision: contingent on catch *full*-pass (direction AND confidence) ≥ 80%, the rule disclosed to participants — so a participant can be analysis-included but bonus-ineligible.
 3. Median main-block direction RT outside [250 ms, response-window cap] → exclude.
 4. RT distributions with implausibly low variance → flag.
 5. Forward-bias absence → flag (the human bias is large and robust per Meding et al.; bots rarely match it).
@@ -450,8 +450,8 @@ Resolved so far:
 - ✅ Confidence scale labels: *guess · somewhat unsure · unsure · somewhat sure · certain*.
 - ✅ Familiarization format: HTML text trials via `plugin-html-keyboard-response` (Layer A in §3.4), now ~8 trials covering direction + confidence + combined.
 - ✅ Catch trials: 10 unique videos (2 directions × 5 confidence levels), one variant each. White text on dark grey, 480p, 2.5 s. **2** catch trials in Layer B practice; **1** in Layer C qualification (excluded from the gate fraction); 5 per main block.
-- ✅ Catch-trial inclusion threshold: ≥ 80% pass to be included in analysis.
-- ✅ Catch-trial bonus: payment bonus contingent on ≥ 80% catch-trial pass rate, **communicated to participants upfront** in instructions/consent. Paid manually after offline scoring.
+- ✅ Catch-trial inclusion threshold: ≥ 80% **catch-direction** pass rate to be included in analysis (the direction key only — catch full-pass conflated honest confidence-key slips with genuine inattention; see §3.9).
+- ✅ Catch-trial bonus: payment bonus contingent on ≥ 80% **catch-full** pass rate (direction AND confidence), **communicated to participants upfront** in instructions/consent. Paid manually after offline scoring. Inclusion and bonus are separate decisions.
 - ✅ Counterbalancing target *N* = **20 participants per clip per direction** for the full deployment (4,400 unique clip-direction combinations × 20 = 88,000 viewings ÷ ~380 real trials/participant ≈ **~232 participants minimum**; budget ~260–280 to absorb dropouts/exclusions).
 - ✅ Payment structure: per the §6 recommendation — ~£1.50 base + ~£2 × 4 main blocks + ~£1 attention bonus ≈ £10.50 max for ~45 min ≈ £14/hr.
 - ✅ Qualification threshold: ≥ 75% direction accuracy (≥ 7/10 of qualification trials).

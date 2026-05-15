@@ -27,9 +27,14 @@ Metrics (column-name → meaning):
 
   Catch trials (the attention probe)
     catch_n
-    catch_direction_pass_rate     fraction with direction matching pm_direction
+    catch_direction_pass_rate     fraction with direction matching pm_direction.
+                                  THIS is the inclusion-gate attention metric
+                                  (≥ 0.80) — see `included` below.
     catch_confidence_pass_rate    fraction with confidence matching pm_expected_confidence
-    catch_full_pass_rate          both right — this is the §3.9 inclusion gate (≥ 0.80)
+    catch_full_pass_rate          direction AND confidence both right
+    catch_bonus_eligible          boolean — catch_full_pass_rate ≥ 0.80. The
+                                  §3.9 attention bonus contract; separate from
+                                  analysis inclusion.
 
   Main-task accuracy
     main_direction_accuracy       computed offline via private manifest
@@ -48,8 +53,10 @@ Metrics (column-name → meaning):
     calib_acc_conf{1..5}          binned accuracy at each confidence level
 
   Composite + inclusion
-    subject_quality_weight        catch_full_pass × clip(d',0,3)/3 × clip(m_ratio,0,1.5)/1.5
-    included                      boolean — passes the §3.9 inclusion gate
+    subject_quality_weight        catch_direction_pass × clip(d',0,3)/3 × clip(m_ratio,0,1.5)/1.5
+    included                      boolean — passes the inclusion gate
+                                  (catch_direction ≥ .80, qualification ≥ .75,
+                                  RT ∈ [250,3000] ms, γ > 0, play_completed ≥ .9)
 
 Usage:
     from analysis.per_subject import build_per_subject_table
@@ -379,10 +386,12 @@ def _session_metrics(sess_df: pd.DataFrame) -> dict:
 
     # Composite quality weight.
     #
-    #   weight = catch_full_pass × ability × metacog
+    #   weight = catch_direction_pass × ability × metacog
     #
     # Each factor maps to [0, 1] with cap; product zeroes out a
-    # subject who fails any one. `metacog` prefers M-ratio (the
+    # subject who fails any one. The attention factor is catch
+    # *direction* pass rate, NOT catch full-pass — see the inclusion
+    # gate note below for why. `metacog` prefers M-ratio (the
     # principled SDT metric); falls back to Goodman–Kruskal γ when
     # the meta-d' MLE didn't converge (γ ∈ [−1, +1] → scale by 1.5
     # so γ = 2/3 maps to a max-credit weight contribution, matching
@@ -392,7 +401,7 @@ def _session_metrics(sess_df: pd.DataFrame) -> dict:
         return float(np.clip(x, lo, hi)) if pd.notna(x) else 0.0
 
     cap_d = _clip01(d_prime / 3.0) if pd.notna(d_prime) else 0.0
-    cap_catch = _clip01(catch_full_rate) if pd.notna(catch_full_rate) else 0.0
+    cap_catch = _clip01(catch_dir_rate) if pd.notna(catch_dir_rate) else 0.0
     if pd.notna(m_ratio):
         cap_m = _clip01(m_ratio / 1.5)
         metacog_source = 'm_ratio'
@@ -404,13 +413,35 @@ def _session_metrics(sess_df: pd.DataFrame) -> dict:
         metacog_source = 'none'
     subject_quality_weight = cap_catch * cap_d * cap_m
 
-    # Hard inclusion gate from §3.9.
+    # Hard inclusion gate.
+    #
+    # Attention is gated on catch *direction* pass rate, not catch
+    # full-pass (direction AND confidence). The catch's confidence
+    # instruction ("...then press 3") conflicts with the response
+    # mapping the participant was trained on for 400 trials (number
+    # key = THEIR OWN confidence). An engaged-but-hasty participant
+    # reads the direction correctly, presses it, then rates confidence
+    # the normal way instead of obeying the override — failing
+    # full-pass while reading every instruction. catch_direction
+    # cleanly separates genuine autopilot (can't fake 16/20 on a
+    # 50/50 forward/backward split) from this confidence-key slip.
+    # catch *full*-pass is retained for the bonus decision only
+    # (`catch_bonus_eligible` below) — that contract was disclosed
+    # to participants up front and is not relaxed.
     included = bool(
-        (catch_full_rate >= 0.80 if pd.notna(catch_full_rate) else False)
+        (catch_dir_rate >= 0.80 if pd.notna(catch_dir_rate) else False)
         and (qual_acc >= 0.75 if pd.notna(qual_acc) else False)
         and (250 <= median_dir_rt <= 3000 if pd.notna(median_dir_rt) else False)
         and (calib_gamma > 0 if pd.notna(calib_gamma) else False)
         and (frac_play_completed >= 0.9 if pd.notna(frac_play_completed) else False)
+    )
+
+    # Bonus eligibility: the §3.9 attention bonus stays contingent on
+    # catch FULL-pass ≥ 0.80 (direction AND confidence) — the rule
+    # communicated to participants in the task instructions. A
+    # participant can be analysis-included but bonus-ineligible.
+    catch_bonus_eligible = (
+        bool(catch_full_rate >= 0.80) if pd.notna(catch_full_rate) else False
     )
 
     return {
@@ -433,6 +464,7 @@ def _session_metrics(sess_df: pd.DataFrame) -> dict:
         'catch_direction_pass_rate': catch_dir_rate,
         'catch_confidence_pass_rate': catch_conf_rate,
         'catch_full_pass_rate': catch_full_rate,
+        'catch_bonus_eligible': catch_bonus_eligible,
         'main_direction_accuracy': main_acc,
         'forward_response_rate': forward_response_rate,
         'forward_bias': forward_bias,
@@ -466,7 +498,8 @@ def make_subject_figure(sess_df: pd.DataFrame, metrics: dict, out_path: Path) ->
     fig.suptitle(
         f"Subject {metrics['pid_hash']}  |  "
         f"d'={metrics['d_prime']:.2f}  meta-d'={metrics['meta_d_prime']:.2f}  "
-        f"M-ratio={metrics['m_ratio']:.2f}  catch={metrics['catch_full_pass_rate']:.2f}  "
+        f"M-ratio={metrics['m_ratio']:.2f}  "
+        f"catch dir/full={metrics['catch_direction_pass_rate']:.2f}/{metrics['catch_full_pass_rate']:.2f}  "
         f"weight={metrics['subject_quality_weight']:.2f}  "
         f"{'INCLUDED' if metrics['included'] else 'EXCLUDED'}",
         fontsize=12,
@@ -567,9 +600,10 @@ def make_subject_figure(sess_df: pd.DataFrame, metrics: dict, out_path: Path) ->
         '',
         f"practice acc:            {metrics['practice_direction_accuracy']:.3f}",
         f"qualification acc:       {metrics['qualification_direction_accuracy']:.3f}",
-        f"catch direction:         {metrics['catch_direction_pass_rate']:.3f}",
+        f"catch direction (gate):  {metrics['catch_direction_pass_rate']:.3f}",
         f"catch confidence:        {metrics['catch_confidence_pass_rate']:.3f}",
-        f"catch full pass:         {metrics['catch_full_pass_rate']:.3f}",
+        f"catch full (bonus):      {metrics['catch_full_pass_rate']:.3f}  "
+        f"[{'bonus' if metrics['catch_bonus_eligible'] else 'no bonus'}]",
         '',
         f"main accuracy:           {metrics['main_direction_accuracy']:.3f}",
         f"d':                      {metrics['d_prime']:.3f}",

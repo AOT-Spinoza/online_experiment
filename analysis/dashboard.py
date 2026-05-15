@@ -537,8 +537,8 @@ tbody tr.highlight { background: #fff3c4 !important; }
 
 <section class="chart-row">
     <div class="chart-card">
-        <h3>Catch-trial pass rate</h3>
-        <div class="desc">Direction AND confidence correct. Inclusion threshold = 0.80.</div>
+        <h3>Catch-trial direction pass rate</h3>
+        <div class="desc">Fraction of catch trials with the correct direction key — the attention-gate metric (inclusion threshold = 0.80). Catch <em>full</em>-pass (direction AND confidence) is shown per-subject in the table and governs the £1 bonus only.</div>
         <div class="canvas-wrap"><canvas id="ch-catch"></canvas></div>
     </div>
     <div class="chart-card">
@@ -650,7 +650,9 @@ const TABLE_COLS = [
     { key: 'included',                    label: 'inc',      fmt: 'pill' },
     { key: 'n_blocks_completed',          label: 'blocks',   fmt: 'int' },
     { key: 'subject_quality_weight',      label: 'qual w',   fmt: 'f3' },
-    { key: 'catch_full_pass_rate',        label: 'catch',    fmt: 'f2' },
+    { key: 'catch_direction_pass_rate',   label: 'catch dir (gate)', fmt: 'f2' },
+    { key: 'catch_full_pass_rate',        label: 'catch full (bonus)', fmt: 'f2' },
+    { key: 'catch_bonus_eligible',        label: 'bonus',    fmt: 'bool' },
     { key: 'd_prime',                     label: "d'",       fmt: 'f2' },
     { key: 'meta_d_prime',                label: "meta-d'",  fmt: 'f2' },
     { key: 'm_ratio',                     label: 'M-ratio',  fmt: 'f2' },
@@ -718,10 +720,11 @@ function histogram(values, edges) {
 }
 
 // Build the list of failure reasons for a subject (mirrors per_subject._session_metrics).
+// NOTE: the attention gate is catch *direction* pass rate, not catch full-pass.
 function exclusionReasons(s) {
     const r = [];
     if (s.n_blocks_completed != null && s.n_blocks_completed < 4) r.push(`only ${s.n_blocks_completed}/4 blocks`);
-    if (s.catch_full_pass_rate == null || s.catch_full_pass_rate < 0.80) r.push('catch < .80');
+    if (s.catch_direction_pass_rate == null || s.catch_direction_pass_rate < 0.80) r.push('catch direction < .80');
     if (s.qualification_direction_accuracy == null || s.qualification_direction_accuracy < 0.75) r.push('qualification < .75');
     if (s.median_direction_rt_main == null || s.median_direction_rt_main < 250 || s.median_direction_rt_main > 3000) r.push('RT outside [250, 3000] ms');
     if (s.calib_gamma == null || s.calib_gamma <= 0) r.push('γ ≤ 0');
@@ -897,8 +900,8 @@ function chartMRatio() {
 function chartCatch() {
     const subs = activeSubjects();
     const edges = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.001];
-    chartHistogram('catch', 'ch-catch', subs.map(s => s.catch_full_pass_rate), edges,
-        { barColor: COLORS.accent, x_title: 'catch pass rate (0.80 threshold)', label_decimals: 2 });
+    chartHistogram('catch', 'ch-catch', subs.map(s => s.catch_direction_pass_rate), edges,
+        { barColor: COLORS.accent, x_title: 'catch DIRECTION pass rate (0.80 gate)', label_decimals: 2 });
 }
 function chartForward() {
     const subs = activeSubjects();
