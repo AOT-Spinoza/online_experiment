@@ -130,26 +130,52 @@ def _per_trial_drift_curve(
     return out
 
 
-def _source_asymmetry(per_source: pd.DataFrame) -> list[dict]:
-    """Convert per_source.tsv into JSON records for the asymmetry scatter.
-    Only sources with both forward AND backward viewings are included
-    (else the asymmetry isn't defined)."""
-    out = []
+def _source_asymmetry(per_source: pd.DataFrame) -> dict:
+    """Convert per_source.tsv into a JSON-safe payload for the asymmetry
+    scatter and the most-asymmetric-sources table.
+
+    Only sources with both forward AND backward viewings are kept (else
+    the asymmetry isn't defined). The corpus forward-bias offsets (raw
+    and z-scale) are recovered as `asymmetry − asymmetry_residual`,
+    which is constant across rows — used to draw the bias-adjusted
+    symmetry line on the scatter.
+    """
+    def _g(r, col):
+        v = r.get(col)
+        return float(v) if pd.notna(v) else None
+
+    recs = []
     for _, r in per_source.iterrows():
         fw = r.get('identifiability_score_fw')
         bw = r.get('identifiability_score_bw')
         if pd.isna(fw) or pd.isna(bw):
             continue
-        out.append({
+        recs.append({
             'source_id': str(r['source_id']),
             'id_fw': float(fw),
             'id_bw': float(bw),
-            'asymmetry': float(r.get('asymmetry') or 0.0),
+            'asymmetry': _g(r, 'asymmetry'),
+            'asymmetry_z': _g(r, 'asymmetry_z'),
+            'asymmetry_residual': _g(r, 'asymmetry_residual'),
+            'asymmetry_z_residual': _g(r, 'asymmetry_z_residual'),
+            'mean_identifiability': _g(r, 'mean_identifiability'),
             'n_views_fw': int(r.get('n_views_fw') or 0),
             'n_views_bw': int(r.get('n_views_bw') or 0),
-            'preferred_direction': str(r.get('preferred_direction') or 'tied'),
+            'preferred_direction': str(r.get('preferred_direction') or 'n/a'),
         })
-    return out
+
+    offset_raw = 0.0
+    offset_z = 0.0
+    if {'asymmetry', 'asymmetry_residual'}.issubset(per_source.columns):
+        d = (per_source['asymmetry'] - per_source['asymmetry_residual']).dropna()
+        if len(d):
+            offset_raw = float(d.median())
+    if {'asymmetry_z', 'asymmetry_z_residual'}.issubset(per_source.columns):
+        d = (per_source['asymmetry_z'] - per_source['asymmetry_z_residual']).dropna()
+        if len(d):
+            offset_z = float(d.median())
+
+    return {'records': recs, 'offset_raw': offset_raw, 'offset_z': offset_z}
 
 
 def _video_aggregates(pv: pd.DataFrame, corpus_target_cells: int = 4400) -> dict:
@@ -281,13 +307,16 @@ def build_dashboard(
         )
 
     per_source = pd.read_csv(per_source_path, sep='\t') if Path(per_source_path).exists() else pd.DataFrame()
-    per_source_records = _source_asymmetry(per_source) if len(per_source) else []
+    per_source_payload = (
+        _source_asymmetry(per_source) if len(per_source)
+        else {'records': [], 'offset_raw': 0.0, 'offset_z': 0.0}
+    )
 
     payload = {
         'generated_at': datetime.now(timezone.utc).isoformat(),
         'subjects': subjects,
         'per_video': _video_aggregates(pv),
-        'per_source': per_source_records,
+        'per_source': per_source_payload,
         'drift': {
             'n_max': DRIFT_N_MAX,
             'window': DRIFT_WINDOW,
@@ -569,9 +598,18 @@ tbody tr.highlight { background: #fff3c4 !important; }
     </div>
     <div class="chart-card">
         <h3>Per-source asymmetry: forward vs backward identifiability</h3>
-        <div class="desc">One point per source video; axes are both identifiability score, plotted at 1:1. On-diagonal = same difficulty in both directions; off-diagonal = asymmetric (one direction much easier). Hover for source_id + scores.</div>
+        <div class="desc">One point per source, axes 1:1. Solid diagonal = raw symmetry (y = x); dashed diagonal = <em>bias-adjusted</em> symmetry (y = x − corpus offset) — the population forward bias shifts every clip off the solid line, so the dashed line is the real "no per-clip asymmetry" locus. Points are coloured by <strong>asymmetry_z_residual</strong> (arctanh-decompressed, bias-removed): <span style="color:#c8702f;font-weight:600;">orange = forward render carries the cleaner cue</span>, <span style="color:#2a6ea8;font-weight:600;">blue = reversed render is the more conspicuous one</span>, pale = unremarkable. Hover for the numbers.</div>
         <div class="canvas-wrap canvas-square"><canvas id="ch-asymmetry"></canvas></div>
     </div>
+</section>
+
+<section class="table-card">
+    <h3>Most asymmetric sources (bias-adjusted)</h3>
+    <div class="hint">Top sources by |asymmetry_z_residual| — the arrow-of-time cue is most direction-dependent here. <strong>preferred = forward</strong>: the scene's directionality is carried by its forward render; <strong>backward</strong>: carried by the reversed render (often a conspicuous anti-gravity / anti-entropy event). Raw `asymmetry` shown alongside so you can see how much of it was just the forward-bias offset.</div>
+    <table id="asym-table">
+        <thead><tr id="asym-thead"></tr></thead>
+        <tbody id="asym-tbody"></tbody>
+    </table>
 </section>
 
 <section class="chart-row">
@@ -1080,40 +1118,60 @@ function chartDrift() {
     });
 }
 
+// Diverging colour for the bias-adjusted residual: blue (reverse-salient,
+// residual < 0) — pale grey (unremarkable) — orange (forward-salient,
+// residual > 0). `sat` is the residual magnitude that maps to full colour.
+function residualColor(r, sat) {
+    if (r == null || isNaN(r)) return 'rgba(180,180,180,0.35)';
+    const t = Math.max(-1, Math.min(1, r / (sat || 1)));
+    const grey = [205, 205, 205], orange = [200, 112, 47], blue = [42, 110, 168];
+    const lerp = (a, b, u) => Math.round(a + (b - a) * u);
+    const end = t >= 0 ? orange : blue;
+    const u = Math.abs(t);
+    const c = grey.map((g, i) => lerp(g, end[i], u));
+    return `rgba(${c[0]},${c[1]},${c[2]},${(0.4 + 0.5 * u).toFixed(2)})`;
+}
+
 function chartAsymmetry() {
     destroy('asymmetry');
-    const rows = PAYLOAD.per_source || [];
-    // Color by absolute asymmetry: large = orange, small = blue. Size by total views.
-    const points = rows.map(r => ({
-        x: r.id_fw,
-        y: r.id_bw,
-        _row: r,
-    }));
-    const colors = rows.map(r => {
-        const a = Math.abs(r.asymmetry);
-        if (a >= 1.0) return COLORS.accent2 + 'CC';   // very asymmetric
-        if (a >= 0.5) return '#e6a542CC';            // moderately
-        return COLORS.accent + '55';                  // near-diagonal
-    });
+    const ps = PAYLOAD.per_source || { records: [], offset_raw: 0 };
+    const rows = ps.records || [];
+    const offsetRaw = ps.offset_raw || 0;
+
+    // Colour-scale saturation = 95th percentile of |z-residual| so the
+    // diverging map auto-fits the cohort rather than using a fixed cap.
+    const absRes = rows.map(r => Math.abs(r.asymmetry_z_residual ?? 0))
+                       .filter(v => !isNaN(v)).sort((a, b) => a - b);
+    const sat = absRes.length
+        ? (absRes[Math.floor(absRes.length * 0.95)] || 1) : 1;
+
+    const points = rows.map(r => ({ x: r.id_fw, y: r.id_bw, _row: r }));
+    const colors = rows.map(r => residualColor(r.asymmetry_z_residual, sat));
     const sizes = rows.map(r => {
         const n = (r.n_views_fw || 0) + (r.n_views_bw || 0);
-        return Math.min(8, 2 + n);
+        return Math.min(8, 2 + Math.log2(Math.max(2, n)));
     });
 
     charts.asymmetry = new Chart(document.getElementById('ch-asymmetry'), {
         type: 'scatter',
         data: {
             datasets: [
-                {
-                    label: 'symmetric (y = x)',
+                {   // raw symmetry: y = x
+                    label: 'raw symmetry',
                     type: 'line',
-                    data: [{x: -1, y: -1}, {x: 1, y: 1}],
-                    borderColor: '#888',
-                    borderDash: [4,4],
+                    data: [{ x: -1, y: -1 }, { x: 1, y: 1 }],
+                    borderColor: '#bbb',
                     borderWidth: 1,
-                    pointRadius: 0,
-                    fill: false,
-                    showLine: true,
+                    pointRadius: 0, fill: false, showLine: true,
+                },
+                {   // bias-adjusted symmetry: y = x - offset_raw
+                    label: 'bias-adjusted symmetry',
+                    type: 'line',
+                    data: [{ x: -1, y: -1 - offsetRaw }, { x: 1, y: 1 - offsetRaw }],
+                    borderColor: '#666',
+                    borderDash: [5, 4],
+                    borderWidth: 1.2,
+                    pointRadius: 0, fill: false, showLine: true,
                 },
                 {
                     label: 'source',
@@ -1134,13 +1192,16 @@ function chartAsymmetry() {
                     callbacks: {
                         title: () => '',
                         label: c => {
-                            if (c.datasetIndex === 0) return '';
+                            if (c.datasetIndex < 2) return '';
                             const r = points[c.dataIndex]?._row;
                             if (!r) return '';
+                            const fmt1 = v => (v == null || isNaN(v))
+                                ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2);
                             return [
                                 `source ${r.source_id}`,
-                                `fw = ${r.id_fw.toFixed(2)} (n=${r.n_views_fw}) · bw = ${r.id_bw.toFixed(2)} (n=${r.n_views_bw})`,
-                                `asymmetry = ${(r.asymmetry >= 0 ? '+' : '') + r.asymmetry.toFixed(2)}  → ${r.preferred_direction}`,
+                                `fw ${r.id_fw.toFixed(2)} (n=${r.n_views_fw}) · bw ${r.id_bw.toFixed(2)} (n=${r.n_views_bw})`,
+                                `raw asymmetry ${fmt1(r.asymmetry)}  ·  z-residual ${fmt1(r.asymmetry_z_residual)}`,
+                                `→ prefers ${r.preferred_direction}`,
                             ];
                         },
                     },
@@ -1152,6 +1213,35 @@ function chartAsymmetry() {
             },
         },
     });
+}
+
+function renderAsymTable(topN = 15) {
+    const ps = PAYLOAD.per_source || { records: [] };
+    const rows = (ps.records || [])
+        .filter(r => r.asymmetry_z_residual != null)
+        .slice()  // per_source.tsv is already sorted by |z-residual| desc, but be safe
+        .sort((a, b) => Math.abs(b.asymmetry_z_residual) - Math.abs(a.asymmetry_z_residual))
+        .slice(0, topN);
+
+    const cols = [
+        { key: 'source_id', label: 'source', fmt: 'str' },
+        { key: 'id_fw', label: 'id fw', fmt: 'fbias' },
+        { key: 'id_bw', label: 'id bw', fmt: 'fbias' },
+        { key: 'asymmetry', label: 'raw asymmetry', fmt: 'fbias' },
+        { key: 'asymmetry_z_residual', label: 'z-residual (bias-adj)', fmt: 'fbias' },
+        { key: 'preferred_direction', label: 'prefers', fmt: 'str' },
+        { key: '_nmin', label: 'min n views', fmt: 'int' },
+    ];
+    document.getElementById('asym-thead').innerHTML =
+        cols.map(c => `<th>${c.label}</th>`).join('');
+    document.getElementById('asym-tbody').innerHTML = rows.map(r => {
+        r._nmin = Math.min(r.n_views_fw || 0, r.n_views_bw || 0);
+        return '<tr>' + cols.map(c => {
+            const right = ['int', 'f2', 'fbias'].includes(c.fmt) ? 'right' : '';
+            const mono = c.key === 'source_id' ? 'mono' : '';
+            return `<td class="${right} ${mono}">${fmt(r[c.key], c.fmt)}</td>`;
+        }).join('') + '</tr>';
+    }).join('');
 }
 
 function chartIdByDirection() {
@@ -1442,6 +1532,7 @@ function renderAll() {
     chartDrift();
     chartIdScore();
     chartAsymmetry();
+    renderAsymTable();
     chartIdByDirection();
     chartConfAcc();
     renderConfusingTable();
