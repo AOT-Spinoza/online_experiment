@@ -409,11 +409,19 @@ online_experiment/
 │   │                            #   main_blocks, block_end, debrief, trial_factory
 │   └── dist/                    # build output (gitignored)
 └── analysis/
-    ├── load_data.py             # JSON-bundle / CSV loader, confidence-row merge, private-manifest join
-    ├── explore.ipynb            # exploration notebook (per-session basics: RT, confidence, calibration, catch)
-    ├── requirements.txt         # pandas, numpy, matplotlib, seaborn, jupyter
+    ├── load_data.py             # single-session loader: JSON-bundle / CSV / TSV, confidence-row merge, private-manifest join
+    ├── load_all.py              # walks analysis/data/ (incl. JATOS exports) → responses.parquet
+    ├── per_subject.py           # per-session SDT (d', meta-d', M-ratio), calibration, catch, quality weight → per_subject.tsv + PNGs
+    ├── per_video.py             # per-(stimulus_id × direction) identifiability score + bootstrap CIs → per_video.tsv
+    ├── per_source.py            # forward/backward pivot + bias-removed, arctanh-decompressed asymmetry → per_source.tsv
+    ├── dashboard.py             # self-contained interactive HTML dashboard → derived/dashboard.html
+    ├── figures.py               # publication-quality matplotlib figures → derived/figures/pub/*.pdf
+    ├── explore.ipynb            # exploration notebook (per-session basics + drives the 4-stage pipeline)
+    ├── figures.ipynb            # drives figures.py for print-ready PDF figures
+    ├── requirements.txt         # pandas, numpy, scipy, matplotlib, seaborn, metadpy, pyarrow, scikit-learn, jupyter
     ├── score.py                 # (planned) batch scoring across participants
-    └── data/                    # exported session JSONs (gitignored)
+    ├── data/                    # exported session files (gitignored)
+    └── derived/                 # pipeline outputs: parquet, TSVs, dashboard.html, figure PDFs (gitignored)
 ```
 
 ## 5. Workflow
