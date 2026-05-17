@@ -603,6 +603,113 @@ def inclusion_figure(
 
 
 # ---------------------------------------------------------------------------
+# Figure - identifiability-score stability (subsampling analysis)
+# ---------------------------------------------------------------------------
+
+def stability_figure(
+    stability_path: str | Path | None = None,
+    per_video_path: str | Path | None = None,
+    save_path: str | Path | None = None,
+    figsize: tuple[float, float] = (11.0, 4.7),
+):
+    """Two-panel subsampling-stability figure for the per-video
+    identifiability score (see analysis/stability.py).
+
+      Left  - PRECISION: m-out-of-n bootstrap SD of the score vs the
+              number of viewers k. Shaded = inter-quartile range across
+              clips. Lower = a k-viewer estimate wobbles less.
+      Right - RANKING RELIABILITY: disjoint split-half correlation vs k
+              (solid = directly measured), extended by the Spearman-
+              Brown projection (dashed) past the measurable range.
+
+    Both panels mark the current mean views/clip. Forward and backward
+    renders are shown separately - backward clips are noisier per-clip
+    but rank more reliably (they span a far wider identifiability range).
+
+    If stability.tsv is missing it is built on the fly (a ~1 min
+    subsampling run)."""
+    from .stability import build_stability_table, spearman_brown
+
+    if stability_path is None:
+        stability_path = DEFAULT_DERIVED_DIR / 'stability.tsv'
+    if per_video_path is None:
+        per_video_path = DEFAULT_DERIVED_DIR / 'per_video.tsv'
+    stability_path = Path(stability_path)
+    if not stability_path.exists():
+        build_stability_table(out_tsv=stability_path)
+    df = pd.read_csv(stability_path, sep='\t')
+
+    mean_k = None
+    if Path(per_video_path).exists():
+        pv = pd.read_csv(per_video_path, sep='\t')
+        if 'n_views' in pv.columns and len(pv):
+            mean_k = float(pv['n_views'].mean())
+
+    prec = df[df['analysis'] == 'precision']
+    sh = df[df['analysis'] == 'splithalf']
+    dir_colors = [('forward', C_BLUE), ('backward', C_ORANGE)]
+
+    with _styled():
+        fig, (axL, axR) = plt.subplots(1, 2, figsize=figsize,
+                                       constrained_layout=True)
+
+        # --- Panel A: precision (bootstrap SD) ---
+        for direction, color in dir_colors:
+            p = prec[prec['direction'] == direction].sort_values('k')
+            if not len(p):
+                continue
+            axL.fill_between(p['k'], p['sd_q25'], p['sd_q75'],
+                             color=color, alpha=0.15, zorder=1)
+            axL.plot(p['k'], p['sd_median'], color=color, marker='o',
+                     markersize=5, lw=2.0, zorder=3, label=direction)
+        axL.axhline(0.10, color='#444444', ls=':', lw=1.0,
+                    label='SD = 0.10')
+        if mean_k:
+            axL.axvline(mean_k, color='#999999', ls='--', lw=1.0, zorder=2)
+            axL.text(mean_k, axL.get_ylim()[1], f' current mean ~{mean_k:.0f}',
+                     fontsize=7.5, color='#666666', ha='left', va='top')
+        axL.set_xlabel('viewers per clip  (k)')
+        axL.set_ylabel('identifiability-score SD  (m-out-of-n bootstrap)')
+        axL.set_title('Precision - how much a k-viewer estimate wobbles')
+        axL.legend(frameon=False, loc='upper right')
+        _despine(axL)
+
+        # --- Panel B: split-half reliability + Spearman-Brown projection ---
+        for direction, color in dir_colors:
+            s = sh[sh['direction'] == direction].sort_values('k')
+            if not len(s):
+                continue
+            axR.plot(s['k'], s['splithalf_spearman'], color=color,
+                     marker='o', markersize=5, lw=2.0, zorder=3,
+                     label=f'{direction} (measured)')
+            # Spearman-Brown projection from the largest measured k.
+            k_meas = int(s['k'].iloc[-1])
+            r_meas = float(s['splithalf_spearman'].iloc[-1])
+            kp = np.arange(k_meas, 41)
+            rp = [spearman_brown(r_meas, k_meas, int(kk)) for kk in kp]
+            axR.plot(kp, rp, color=color, ls=(0, (5, 3)), lw=1.4,
+                     alpha=0.8, zorder=2)
+        axR.axhline(0.90, color='#444444', ls=':', lw=1.0,
+                    label='r = 0.90')
+        if mean_k:
+            axR.axvline(mean_k, color='#999999', ls='--', lw=1.0, zorder=1)
+            axR.text(mean_k, 0.32, f' current mean ~{mean_k:.0f}',
+                     fontsize=7.5, color='#666666', ha='left', va='bottom')
+        axR.set_xlabel('viewers per clip  (k)')
+        axR.set_ylabel('split-half reliability  (Spearman r)')
+        axR.set_ylim(0.3, 1.0)
+        axR.set_title('Ranking reliability  (dashed = Spearman-Brown projection)')
+        axR.legend(frameon=False, loc='lower right')
+        _despine(axR)
+
+        fig.suptitle('Identifiability-score stability vs number of viewers',
+                     fontsize=13)
+
+    _save(fig, save_path)
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Batch entry point
 # ---------------------------------------------------------------------------
 
@@ -616,6 +723,7 @@ _FIGURES = {
     'confidence_accuracy': confidence_accuracy_figure,
     'corpus_coverage': corpus_coverage_figure,
     'inclusion': inclusion_figure,
+    'stability': stability_figure,
 }
 
 

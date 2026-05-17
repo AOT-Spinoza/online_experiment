@@ -414,6 +414,7 @@ online_experiment/
     ├── per_subject.py           # per-session SDT (d', meta-d', M-ratio), calibration, catch, quality weight → per_subject.tsv + PNGs
     ├── per_video.py             # per-(stimulus_id × direction) identifiability score + bootstrap CIs → per_video.tsv
     ├── per_source.py            # forward/backward pivot + bias-removed, arctanh-decompressed asymmetry → per_source.tsv
+    ├── stability.py             # subsampling convergence analysis (bootstrap SD + split-half reliability vs k) → stability.tsv
     ├── dashboard.py             # self-contained interactive HTML dashboard → derived/dashboard.html
     ├── figures.py               # publication-quality matplotlib figures → derived/figures/pub/*.pdf
     ├── explore.ipynb            # exploration notebook (per-session basics + drives the 4-stage pipeline)
